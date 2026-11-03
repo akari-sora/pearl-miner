@@ -87,7 +87,7 @@ def baw(args, timeout=60):
     except subprocess.TimeoutExpired:
         return {"success": False, "error": {"code": "TIMEOUT", "message": f"baw {' '.join(args[:2])} timed out"}}
     except _submit.UnsafeArg as e:
-        return {"success": False, "error": {"code": "UNSAFE_ARG", "message": str(e)}}
+        return {"success": False, "error": {"code": _submit.UNSAFE_ARG, "message": str(e)}}
     except OSError as e:
         return {"success": False, "error": {"code": "NO_BAW", "message": str(e)}}
     try:
@@ -502,7 +502,13 @@ def cmd_run(a):
 
 def main():
     _submit.safe_stdio()
-    _submit.BAW = _submit.find_baw()  # None: plain "baw", which fails as NO_BAW and refuses
+    _submit.BAW = _submit.find_baw()
+    if not _submit.BAW:  # never fall back to a bare "baw": Windows would also search python's own folder and cwd
+        raise SystemExit("baw not found on PATH" + (" (Windows: baw.cmd from `npm install -g`; see docs/PLATFORMS.md)"
+                                                    if _submit.WINDOWS else ""))
+    if _submit.WINDOWS and _submit.BAW.lower().endswith((".cmd", ".bat")) and _submit.cmd_path_problem(_submit.BAW):
+        raise SystemExit(f"baw is at {_submit.BAW}, but {_submit.cmd_path_problem(_submit.BAW)}: move npm's global "
+                         "folder (npm config set prefix) to a path without these characters; see docs/PLATFORMS.md")
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("plan", "run"):

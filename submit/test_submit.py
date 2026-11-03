@@ -202,11 +202,15 @@ def run_case(name, chain, n_proofs, journal=None, **kw):
 
 
 FAKE_CLI = r'''
-import json, os, sys, time
+import json, os, subprocess, sys, time
 sys.stdout.reconfigure(encoding="utf-8")
 if os.environ.get("FAKE_CLI_PIDFILE"):
     with open(os.environ["FAKE_CLI_PIDFILE"], "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
+if os.environ.get("FAKE_CLI_GRANDCHILD"):  # a child of its own that inherits stdout, like node's helpers would
+    g = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    with open(os.environ["FAKE_CLI_GRANDCHILD"], "w", encoding="utf-8") as f:
+        f.write(str(g.pid))
 if os.environ.get("FAKE_CLI_SLEEP"):
     time.sleep(float(os.environ["FAKE_CLI_SLEEP"]))
 print(json.dumps({"success": True, "data": {"args": sys.argv[1:], "symbol": "\u73cd\u73e0\u5e01"}}, ensure_ascii=False))
@@ -230,6 +234,16 @@ def make_fake_cli(d):
     return path
 
 
+def gone_soon(pidfile):
+    """True once the process in pidfile has ended (pearl_sell's own check), within 5 s."""
+    import pearl_sell
+    for _ in range(50):
+        if not pearl_sell.mining_run_alive(pidfile):
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def platform_checks(expect):
     """The pieces that differ between macOS, Linux and Windows, with real files and processes."""
     def check(name, cond, got=None):
@@ -240,7 +254,8 @@ def platform_checks(expect):
     here = os.path.dirname(os.path.abspath(__file__))
     tmp = tempfile.mkdtemp(prefix="xplat-")
 
-    # journal lock: refused in this process and in another one while held; free again after release()
+    # journal lock: refused in this process and in another one while held, also when the other process names the
+    # same file differently (relative path); free again after release()
     jp = os.path.join(tmp, "j.jsonl")
     j1 = ps.Journal(jp)
     lk = ps.SenderLock(j1)
@@ -252,35 +267,68 @@ def platform_checks(expect):
     probe = ("import sys; sys.path.insert(0, sys.argv[1]); import pearl_submit as ps\n"
              "try:\n    ps.SenderLock(ps.Journal(sys.argv[2])).release()\nexcept OSError:\n    sys.exit(3)\n")
     other = subprocess.run([sys.executable, "-c", probe, here, jp], timeout=60).returncode
+    os.makedirs(os.path.join(tmp, "sub"))
+    rel = os.path.join("sub", os.pardir, "j.jsonl")  # same file, other spelling, from another working directory
+    other_rel = subprocess.run([sys.executable, "-c", probe, here, rel], cwd=tmp, timeout=60).returncode
     j1.write(ev="note", text="\u73cd\u73e0\u5e01")  # the journal stays writable and readable while locked
     back = [r.get("text") for r in ps.Journal(jp).read()]
     lk.release()
-    other_after = subprocess.run([sys.executable, "-c", probe, here, jp], timeout=60).returncode
+    other_after = subprocess.run([sys.executable, "-c", probe, here, rel], cwd=tmp, timeout=60).returncode
     check("lock: a second holder in this process is refused", same == "refused", same)
     check("lock: another process is refused while held", other == 3, other)
+    check("lock: another process using a relative path to the same file is refused", other_rel == 3, other_rel)
     check("lock: the journal is read back while locked (UTF-8)", back == ["\u73cd\u73e0\u5e01"], back)
     check("lock: another process gets it after release()", other_after == 0, other_after)
+    check("lock: no side file next to the journal", sorted(os.listdir(tmp)) == ["j.jsonl", "sub"], os.listdir(tmp))
 
     # cmd.exe guard (checked on every OS by pretending to be on Windows)
     saved = ps.WINDOWS, ps.BAW
     ps.WINDOWS, ps.BAW = True, r"C:\npm\baw.cmd"
+    bads = ("a&b", "100%", "x y", 'q"', "a|b", "x^", "!x", "<x", "x>", "a\nb", "a\tb", "a\rb", "a(b", "a)b",
+            "0xab\n", "\u73cd", "")
     try:
         ok_cmd = ps.baw_cmd(["contract-call", "preview", "--inputData", "0xab12", "--slippage", "1.5"])
         refused = []
-        for bad in ("a&b", "100%", "x y", 'q"', "a|b", "x^", "!x", "<x", "x>"):
+        for bad in bads:
             try:
                 ps.baw_cmd(["market-order", bad])
             except ps.UnsafeArg:
                 refused.append(bad)
+        path_refused = []
+        for path in (r"C:\Users\R&D\AppData\Roaming\npm\baw.cmd", r"C:\Users\a%b\npm\baw.cmd",
+                     r"C:\Users\x!y z\npm\baw.cmd", r"C:\a(b)\baw.cmd"):
+            ps.BAW = path
+            try:
+                ps.baw_cmd(["wallet", "status"])
+            except ps.UnsafeArg:
+                path_refused.append(path)
+        path_ok = [p_ for p_ in (r"C:\Users\Jo Smith\AppData\Roaming\npm\baw.cmd", r"C:\Program Files (x86)\npm\baw.cmd",
+                                 "C:\\Users\\\u738b\\AppData\\Roaming\\npm\\baw.cmd")
+                   if ps.cmd_path_problem(p_) is None]
         ps.BAW = r"C:\Program Files\baw\baw.exe"  # an .exe gets its arguments without cmd.exe: no guard
         exe_cmd = ps.baw_cmd(["x y"])
     finally:
         ps.WINDOWS, ps.BAW = saved
     check("cmd.exe guard: plain arguments pass", ok_cmd[-1] == "--json" and ok_cmd[0].endswith("baw.cmd"))
-    check("cmd.exe guard: & % space quote | ^ ! < > refused", len(refused) == 9, refused)
+    check("cmd.exe guard: & % space quote | ^ ! < > newline tab CR ( ) trailing newline, non-ASCII and empty refused",
+          refused == list(bads), [b for b in bads if b not in refused])
+    check("cmd.exe guard: a baw path cmd.exe would split or expand is refused", len(path_refused) == 4, path_refused)
+    check("cmd.exe guard: spaces, (x86) inside quotes and non-ASCII user names are fine", len(path_ok) == 3, path_ok)
     check("cmd.exe guard: not applied to an .exe", exe_cmd[1:] == ["x y", "--json"])
-    kind, _ = ps.judge_preview({"success": False, "error": {"code": "UNSAFE_ARG", "message": "argument not safe"}})
-    check("UNSAFE_ARG stops the run (refuse, not transient)", kind == "refuse", kind)
+    kind, _ = ps.judge_preview({"success": False, "error": {"code": ps.UNSAFE_ARG,
+                                                           "message": "argument not safe: 'timeout 429'"}})
+    check("UNSAFE_ARG from a preview stops the run (refuse, even with transient words)", kind == "refuse", kind)
+    good = {"success": True, "data": {"requestId": "0f3a9c2e" * 4, "requireConfirmation": False, "gasLimit": 620000,
+                                      "simulationResult": {"simulationCode": "000000000"}, "risks": OK_RISKS,
+                                      "expiresAt": int((time.time() + 300) * 1000)}}
+    kinds = {}
+    for rid in ("0f3a9c2e" * 4, "abc&def", "0xab\n", "id with space", "\u73cd"):
+        j = json.loads(json.dumps(good))
+        j["data"]["requestId"] = rid
+        kinds[rid] = ps.judge_preview(j)[0]
+    check("requestId: a plain token is accepted, anything cmd.exe would read is refused before an attempt",
+          kinds == {"0f3a9c2e" * 4: "ok", "abc&def": "refuse", "0xab\n": "refuse", "id with space": "refuse",
+                    "\u73cd": "refuse"}, kinds)
 
     # a real baw process found on PATH: arguments, UTF-8 output, and a timeout that kills the whole process tree
     bindir = tempfile.mkdtemp(prefix="xplat-bin-")
@@ -296,23 +344,24 @@ def platform_checks(expect):
         d = j.get("data") or {}
         check("baw: arguments arrive unchanged", d.get("args") == ["wallet", "status", "--json"], j)
         check("baw: UTF-8 output decoded", d.get("symbol") == "\u73cd\u73e0\u5e01", d.get("symbol"))
-        pidfile = os.path.join(tmp, "cli.pid")
-        os.environ["FAKE_CLI_SLEEP"], os.environ["FAKE_CLI_PIDFILE"] = "30", pidfile
+        pidfile, gpidfile = os.path.join(tmp, "cli.pid"), os.path.join(tmp, "grandchild.pid")
+        os.environ.update(FAKE_CLI_SLEEP="30", FAKE_CLI_PIDFILE=pidfile, FAKE_CLI_GRANDCHILD=gpidfile)
         t0 = time.time()
         j, _ = REAL_BAW(["wallet", "status"], timeout=3)
         took = time.time() - t0
-        os.environ.pop("FAKE_CLI_SLEEP")
-        os.environ.pop("FAKE_CLI_PIDFILE")
-        check("baw timeout: TIMEOUT within a few seconds", (j.get("error") or {}).get("code") == "TIMEOUT" and took < 9,
-              (j, round(took, 1)))
-        import pearl_sell  # its process check: the sleeping fake (a grandchild on Windows) must be gone
-        gone = False
-        for _ in range(50):
-            if not pearl_sell.mining_run_alive(pidfile):
-                gone = True
-                break
-            time.sleep(0.1)
-        check("baw timeout: the fake process is gone (process tree killed)", gone)
+        for k in ("FAKE_CLI_SLEEP", "FAKE_CLI_PIDFILE", "FAKE_CLI_GRANDCHILD"):
+            os.environ.pop(k)
+        check("baw timeout: TIMEOUT within a few seconds, though a grandchild holds the output pipe",
+              (j.get("error") or {}).get("code") == "TIMEOUT" and took < 9, (j, round(took, 1)))
+        check("baw timeout: the fake process is gone", gone_soon(pidfile))
+        check("baw timeout: its own child is gone too (whole tree killed)", gone_soon(gpidfile))
+        if ps.WINDOWS:  # a baw.cmd in a folder with spaces and (x86): subprocess quotes it, cmd.exe must run it
+            qdir = os.path.join(tempfile.mkdtemp(prefix="xplat-q-"), "npm dir (x86)")
+            os.makedirs(qdir)
+            ps.BAW = make_fake_cli(qdir)
+            j, _ = REAL_BAW(["wallet", "status"], timeout=30)
+            check("baw.cmd in a folder with spaces and (x86) runs", (j.get("data") or {}).get("args")
+                  == ["wallet", "status", "--json"], j)
     finally:
         os.environ["PATH"] = saved_path
         ps.BAW = saved_baw
@@ -718,6 +767,46 @@ def main():
     except SystemExit as e:
         print(f"[second sender] refused: {str(e).replace(tmp, '<tmp>')}")
     held.release()
+
+    # an execute refused before any process started (cmd.exe guard): provably not sent, so exec_rejected + stop,
+    # nothing blocked or reserved (exec_unknown would block these proofs for good)
+    c = FakeChain(open_in=1, cap_proofs=10**6)
+    inner_u = c.baw
+
+    def baw_unsafe(args, journal=None, **kw):
+        if args[:2] == ["contract-call", "execute"]:
+            j = {"success": False, "error": {"code": ps.UNSAFE_ARG,
+                                             "message": "argument not safe to pass through cmd.exe: 'r&1'"}}
+            if journal:
+                journal.write(ev="baw", args=args, resp=j)
+            return j, 0.0
+        return inner_u(args, journal, **kw)
+    c.baw = baw_unsafe
+    r, a, dup = run_case("execute refused before launch (UNSAFE_ARG)", c, 16 * 4)
+    j = ps.Journal(a.journal).read()
+    rej = [x for x in j if x.get("ev") == "exec_rejected" and x.get("code") == ps.UNSAFE_ARG]
+    unk = [x for x in j if x.get("ev") == "exec_unknown"]
+    blocked, _, reserved, open_, _ = ps.blocked_from_journal(j)
+    expect("UNSAFE_ARG execute: exec_rejected and stop, nothing blocked or reserved",
+           len(rej) == 1 and not unk and r.sent == 0 and "refused before launch" in (r.stop_reason or "")
+           and not blocked and reserved == 0 and not open_)
+
+    # a preview whose requestId cmd.exe would read: refused before any attempt is written
+    c = FakeChain(open_in=1, cap_proofs=10**6)
+    inner_r = c.baw
+
+    def baw_bad_rid(args, journal=None, **kw):
+        j, dt_ = inner_r(args, journal, **kw)
+        if args[:2] == ["contract-call", "preview"] and j.get("success") is True:
+            j = json.loads(json.dumps(j))
+            j["data"]["requestId"] = "r&1"
+        return j, dt_
+    c.baw = baw_bad_rid
+    r, a, dup = run_case("preview with a requestId cmd.exe would read", c, 16 * 4)
+    j = ps.Journal(a.journal).read()
+    expect("unsafe requestId: refused before any attempt",
+           r.sent == 0 and not [x for x in j if x.get("ev") == "attempt"]
+           and "not a plain token" in (r.stop_reason or ""))
 
     platform_checks(expect)
 

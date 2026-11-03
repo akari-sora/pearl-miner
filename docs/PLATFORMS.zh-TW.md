@@ -15,13 +15,15 @@ pearl-miner 只用 Python 加上一段 OpenCL 程式（在顯示卡上算雜湊�
 | 元件 | macOS（Apple 晶片） | Linux x86_64 | Windows 11 x64 |
 |---|---|---|---|
 | 挖礦程式 `miner/miner.py` | 已測試（M4 Max） | 應該可用，未測試：測試機沒有顯示卡的 OpenCL 驅動，pocl 在那台也編譯不了任何 kernel（見下表） | 已測試（NVIDIA RTX 4070 SUPER、AMD Radeon 內顯） |
-| 匯出證明 `submit/export_proofs.py` | 已測試 | 已測試 | 已測試 |
+| 匯出證明 `submit/export_proofs.py` | 已測試（手動執行） | 已測試（手動執行） | 已測試（手動執行） |
 | 送單程式 `submit/pearl_submit.py` | 已測試（離線測試、分叉模擬） | 已測試（離線測試） | 已測試（離線測試） |
 | 賣幣程式 `submit/pearl_sell.py` | 已測試（離線測試） | 已測試（離線測試） | 已測試（離線測試） |
 | 分叉模擬 `submit/fork_rehearsal/run_fork.py` | 已測試：`FORK REHEARSAL: PASS` | 應該可用，未測試 | 應該可用，未測試 |
-| 紀錄重播 `tools/replay_log.py` | 已測試 | 已測試 | 已測試 |
+| 紀錄重播 `tools/replay_log.py` | 打碼功能已測試（離線測試）；重播本身沒有跑 | 打碼功能已測試（離線測試） | 打碼功能已測試（離線測試） |
 
-離線測試（`submit/test_submit.py`、`submit/test_sell.py`、`tools/test_replay_log.py`）會真的啟動程式、真的上鎖，
+「手動執行」是指在每個系統上用 `export_proofs.py` 重新驗證了三個在 Mac 上挖到的證明，沒有自動測試涵蓋它。
+離線測試（`submit/test_submit.py`、`submit/test_sell.py`、`tools/test_replay_log.py`、`miner/test_autotune.py`）
+會真的啟動程式、真的上鎖，
 也會用一個假的 `baw`，照真的 `baw` 的方式去呼叫它（Windows 上是透過 `baw.cmd`）。這次測試在任何系統上都**沒有**
 用真的 `baw`，也沒有送出任何真的交易。
 
@@ -32,8 +34,8 @@ Ryzen 9 9950X3D 加 RTX 4070 SUPER 的 Windows 11（Python 3.11，NVIDIA 驅動 
 
 | 顯示卡 | 狀態 | `--test` | 速度（`--bench`） |
 |---|---|---|---|
-| Apple M4 Max（40 核心 GPU，和系統共用記憶體），macOS 內建 OpenCL 1.2 | 已測試 | 通過 | 545–700 MH/s ¹ |
-| NVIDIA GeForce RTX 4070 SUPER，Windows 11，驅動 616.92 | 已測試 | 通過 | 2,070–2,130 MH/s |
+| Apple M4 Max（40 核心 GPU，和系統共用記憶體），macOS 內建 OpenCL 1.2 | 已測試 | 通過 | 約 700 MH/s ¹ |
+| NVIDIA GeForce RTX 4070 SUPER，Windows 11，驅動 616.92 | 已測試 | 通過 | 約 2.0–2.1 GH/s |
 | Ryzen 9 9950X3D 的 AMD Radeon 內顯（gfx1036，CPU 裡附的小顯示晶片，和系統共用記憶體），Windows 11，AMD Adrenalin 驅動 | 已測試 | 通過 | 31 MH/s |
 | Linux 上的 NVIDIA（官方驅動） | 應該可用，未測試 | | |
 | Linux 上的 AMD（ROCm，或 Mesa 的 rusticl） | 應該可用，未測試 | | |
@@ -41,8 +43,8 @@ Ryzen 9 9950X3D 加 RTX 4070 SUPER 的 Windows 11（Python 3.11，NVIDIA 驅動 
 | Intel Arc / Iris Xe（Windows、Linux） | 應該可用，未測試 | | |
 | 用 CPU 跑 OpenCL（pocl、Intel CPU runtime） | 未測試；要用 `--device` 指定，而且很慢。在 Linux 的 Ryzen 7 9700X 上試過 pip 版 pocl 3.0（`pocl-binary-distribution`）：pocl 看得到 CPU，但連一行的小程式都編譯不了（`unknown target CPU 'generic'`），所以沒辦法用它驗證挖礦的 kernel | | |
 
-¹ 測試時這台 Mac 的 GPU 同時在顯示桌面，速度隨其他負載在約 300 到 700 MH/s 之間變動，新舊版本都一樣。
-在 RTX 4070 SUPER 上新舊版本速度相同（交替各跑 8 秒：新版 2,118–2,132、舊版 2,114–2,116 MH/s）。
+¹ 測試時這台 Mac 的 GPU 同時在顯示桌面，速度隨其他負載在約 300 到 723 MH/s 之間變動，新舊版本都一樣。
+在 RTX 4070 SUPER 上新舊版本交替各跑 8 秒，速度相同，都約 2.1 GH/s。
 
 這段顯示卡程式只用到 OpenCL 1.2 的基本功能（64 位元整數、`rotate`、32 位元的 `atomic_inc`），沒有用任何廠商
 專屬的擴充功能。和系統共用記憶體的顯示卡（Apple M 系列、AMD APU、Intel 內顯）不需要特別設定：挖礦時電腦和顯示卡
@@ -65,7 +67,8 @@ python3 miner/miner.py --launch-ms 100 ...     # 每一次丟給顯示卡的工�
   每一次都必須很快做完，不然作業系統會以為顯示卡當掉而把它重設（Windows 叫「TDR」，超過 2 秒就重設；macOS 也有
   類似的保護）。想固定每次的工作量可以用 `--iters N`，`--global-size` 則是同時開多少條工作。
 - `--test` 會用很容易的難度挖一下，把顯示卡找到的 2000 個結果拿到 CPU 上逐一重算，再比對顯示卡找到的數量是否
-  符合預期，最後印出速度。每換一台電腦都先跑一次。
+  符合預期，最後印出速度。每換一台電腦都先跑一次。它跑幾次很短的工作就結束了，工作量還沒調到 `--launch-ms`，
+  所以印出的速度會比 `--bench` 低。
 
 ## 安裝
 
@@ -83,7 +86,8 @@ brew install python node                        # 或用 python.org 的安裝程
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r miner/requirements.txt
 npm install -g @binance/agentic-wallet          # 安裝 baw
-curl -L https://foundry.paradigm.xyz | bash && foundryup   # 安裝 anvil，分叉模擬用
+curl -L https://foundry.paradigm.xyz | bash   # 安裝 anvil，分叉模擬用；裝完開一個新的終端機視窗
+foundryup                                      # （安裝程式只會把 ~/.foundry/bin 加進「新開」的終端機的 PATH）
 python3 miner/miner.py --list-devices
 ```
 
@@ -108,7 +112,8 @@ python3 miner/miner.py --list-devices
   的顯示卡可以試 Mesa 的 rusticl（裝 `mesa-opencl-icd`，再 `export RUSTICL_ENABLE=radeonsi`）。
 - Intel：`intel-opencl-icd`。
 
-`baw` 需要的 Node.js 可以用發行版的套件，或從 [nodejs.org](https://nodejs.org) 下載。`anvil` 和 macOS 一樣用 `foundryup` 安裝。
+`baw` 需要的 Node.js 可以用發行版的套件，或從 [nodejs.org](https://nodejs.org) 下載。`anvil` 和 macOS 一樣：
+先跑 Foundry 的安裝程式，再開一個新的終端機視窗執行 `foundryup`。
 
 ### Windows 10 / 11（PowerShell）
 
@@ -126,6 +131,9 @@ python miner\miner.py --list-devices
   如果裝置管理員裡顯示卡叫「Microsoft 基本顯示介面卡」，代表還沒裝驅動。
 - 請用 Python 3.11 以上：3.11 之前的版本在 Windows 上 `time.sleep` 可能多睡十幾毫秒，3.11 起改用高精度計時器。
 - npm 裝的 `baw` 實際上是 `baw.cmd`，程式會自己在 PATH 裡找到它；裝完記得開一個新的終端機視窗。
+  Windows 會用 cmd.exe 來執行 `.cmd`，所以如果 `baw.cmd` 所在的資料夾名稱裡有 `%`、`!`、`"`（資料夾名稱沒有空白時，
+  還包括 `& | < > ^ ( ) ; , =`），程式會拒絕執行。遇到這種情況，把 npm 的全域資料夾換個地方：
+  `npm config set prefix C:\npm-global`，把那個資料夾加進 PATH，再重新安裝一次 `baw`。
 - 電腦時間要準，因為送單程式是照區塊鏈的時間抓開盤的：開盤前用系統管理員身分執行 `w32tm /resync`，再看 `check`
   印出的 `local clock - block ts`（本機時間和區塊時間的差）。
 - 可以加設 `$env:PYTHONUTF8 = "1"`，讓 Python 全面使用 UTF-8。不設也沒關係，程式寫的紀錄檔和日誌本來就是 UTF-8。
@@ -191,8 +199,9 @@ Remove-Item submit\STOP                    # 下一次啟動前要刪掉
 ```
 
 建立 STOP 檔是所有系統通用的停止方式：程式會把手上這一步做完、寫好日誌和總結，然後自己結束。對送單程式來說，
-在它自己的視窗按 Ctrl-C 效果也一樣。Windows 上**不要**用 `Stop-Process` 或工作管理員去結束它：那會立刻砍掉
-程式（沒有總結），而且在虛擬環境裡只會砍到啟動器，真正的送單程式還在繼續跑。
+在它自己的視窗按 Ctrl-C 效果也一樣。Windows 上**不要**用 `Stop-Process` 或工作管理員去結束它：那會立刻把整個
+送單程式結束掉（在虛擬環境裡，啟動器被砍時會連真正的程式一起帶走），沒有總結；而且當時正在進行的 `baw` 呼叫，
+可能在程式結束後還是會完成。日誌本身不會壞（每一步之前都已經寫進磁碟），但會少了停止紀錄和總結。
 
 ### 在背景挖礦
 
@@ -250,5 +259,5 @@ Start-Process -FilePath python -ArgumentList "miner\miner.py", "--out", "miner\p
 
 **出現 `another run already holds ... journal.jsonl`**
 
-同一份日誌已經有另一個送單程式在用了，先把那一個停掉。程式結束時（就算是當掉）鎖就會自動解開。Windows 上這個鎖
-放在 `journal.jsonl.lock` 這個檔案裡，檔案留著沒有關係。
+同一份日誌已經有另一個送單程式在用了，先把那一個停掉。程式結束時（就算是當掉）鎖就會自動解開。這個鎖是跟著
+日誌檔案本身走的，所以不管第二個程式用什麼寫法指到同一個檔案都會被拒絕，也不會留下任何多餘的檔案。

@@ -4,7 +4,6 @@ proofs.json
 proofs.*.json
 # run journals, logs and pid files (operational data)
 *.jsonl
-*.jsonl.lock
 *.log
 !demo/*.log
 run.pid

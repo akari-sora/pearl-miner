@@ -33,6 +33,9 @@ import numpy as np
 import pyopencl as cl
 from Crypto.Hash import keccak
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from autotune import next_launch  # noqa: E402  (same folder)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_CHALLENGE = bytes.fromhex("30a0e07e58b98de26bb9881b31249b6aa4fc9a479a715fad16dfd3474eb39bdf")
 STAGE0_MASK = 0xFCFFFFFF  # low 32 bits of lane 0 = hash bytes 0..3; bytes 0-2 zero, byte 3 <= 3
@@ -93,8 +96,19 @@ def safe_stdio():
                 pass
 
 
+def info(obj, attr, default="?"):
+    """An OpenCL property, or `default` when the driver will not say."""
+    try:
+        v = getattr(obj, attr)
+        return v.strip() if isinstance(v, str) else v
+    except (cl.Error, AttributeError, ValueError, RuntimeError):
+        return default
+
+
 def all_devices():
-    """[(platform, device)] over every OpenCL platform, in a stable order (the --device numbers)."""
+    """[(platform, device or None, error)] over every OpenCL platform, in a stable order (the --device numbers).
+    A platform that cannot list its devices keeps one numbered entry with its error, so the numbers after it do not
+    move when it fails."""
     try:
         platforms = cl.get_platforms()
     except cl.Error as e:
@@ -103,40 +117,51 @@ def all_devices():
     out = []
     for p in platforms:
         try:
-            out += [(p, d) for d in p.get_devices()]
-        except cl.Error:  # a platform without devices (e.g. a GPU driver for a card that is not installed)
-            pass
+            devs = p.get_devices()
+        except cl.Error as e:  # e.g. a driver for a card that is not installed
+            out.append((p, None, str(e).splitlines()[0][:120] if str(e) else type(e).__name__))
+            continue
+        out += [(p, d, None) for d in devs]
     return out
+
+
+def is_gpu(d):
+    t = info(d, "type", 0)
+    return isinstance(t, int) and bool(t & cl.device_type.GPU)
 
 
 def default_index(devs):
     """The first NVIDIA GPU, else the first GPU of any vendor, else None."""
-    for i, (p, d) in enumerate(devs):
-        if d.type & cl.device_type.GPU and "NVIDIA" in p.name:
+    for i, (p, d, _) in enumerate(devs):
+        if d is not None and is_gpu(d) and "NVIDIA" in str(info(p, "name", "")):
             return i
-    for i, (p, d) in enumerate(devs):
-        if d.type & cl.device_type.GPU:
+    for i, (p, d, _) in enumerate(devs):
+        if d is not None and is_gpu(d):
             return i
     return None
 
 
-def describe(p, d):
-    kinds = [k for k in ("GPU", "CPU", "ACCELERATOR") if d.type & getattr(cl.device_type, k)] or ["OTHER"]
-    try:
-        unified = " unified-memory" if d.host_unified_memory else ""
-    except (cl.Error, AttributeError):
-        unified = ""
-    return (f"{d.name.strip()} [{'/'.join(kinds)}{unified}] platform={p.name.strip()!r} "
-            f"units={d.max_compute_units} mem={d.global_mem_size / 2**30:.1f}GiB {d.version.strip()}")
+def describe(p, d, err):
+    if d is None:
+        return f"(no device) platform={info(p, 'name')!r}: cannot list its devices: {err}"
+    t = info(d, "type", 0)
+    kinds = [k for k in ("GPU", "CPU", "ACCELERATOR") if isinstance(t, int) and t & getattr(cl.device_type, k)]
+    unified = " unified-memory" if info(d, "host_unified_memory", False) else ""
+    mem = info(d, "global_mem_size", None)
+    mem = f"{mem / 2**30:.1f}GiB" if isinstance(mem, int) else "?"
+    return (f"{info(d, 'name')} [{'/'.join(kinds) or 'OTHER'}{unified}] platform={info(p, 'name')!r} "
+            f"units={info(d, 'max_compute_units')} mem={mem} {info(d, 'version')}")
 
 
 def list_devices():
     devs = all_devices()
-    if not devs:
+    if not any(d is not None for _, d, _ in devs):
+        for i, entry in enumerate(devs):
+            print(f"  {i}: {describe(*entry)}")
         raise SystemExit("OpenCL platforms found, but no devices: see docs/PLATFORMS.md")
     dflt = default_index(devs)
-    for i, (p, d) in enumerate(devs):
-        print(f"  {i}: {describe(p, d)}{'   <- default' if i == dflt else ''}")
+    for i, entry in enumerate(devs):
+        print(f"  {i}: {describe(*entry)}{'   <- default' if i == dflt else ''}")
     if dflt is None:
         print("no GPU: pick a device with --device N (a CPU works, slowly)")
 
@@ -145,8 +170,11 @@ def pick_device(index):
     devs = all_devices()
     if index is not None:
         if not 0 <= index < len(devs):
-            raise SystemExit(f"--device {index}: there are {len(devs)} OpenCL devices, see --list-devices")
-        return devs[index][1]
+            raise SystemExit(f"--device {index}: there are {len(devs)} entries, see --list-devices")
+        p, d, err = devs[index]
+        if d is None:
+            raise SystemExit(f"--device {index}: platform {info(p, 'name')!r} cannot list its devices ({err})")
+        return d
     i = default_index(devs)
     if i is None:
         raise SystemExit("no OpenCL GPU found: see --list-devices and pick one with --device N")
@@ -184,8 +212,9 @@ def main():
     if args.list_devices:
         list_devices()
         return
-    if args.global_size < 1 or args.iters < 0 or not 1 <= args.launch_ms <= 10000 or args.local_size < 0:
-        raise SystemExit("bad --global-size / --iters / --launch-ms / --local-size")
+    if (not 1 <= args.global_size <= 0xFFFFFFFF or not 0 <= args.iters <= 0xFFFFFFFF
+            or not 1 <= args.launch_ms <= 10000 or args.local_size < 0):
+        raise SystemExit("bad --global-size / --iters (0 to 4294967295) / --launch-ms (1 to 10000) / --local-size")
 
     seed = resolve_seed(args.seed, args.wallet or None)
     prefix = os.urandom(24)
@@ -242,7 +271,7 @@ def main():
 
     out = None if (args.test or args.bench) else open(args.out, "a", buffering=1, encoding="utf-8")
     base = 0
-    t0 = time.time()
+    t0 = time.perf_counter()  # elapsed times only: monotonic and fine-grained on every OS
     last = t0
     hashes = 0
     proofs = 0
@@ -250,9 +279,9 @@ def main():
     counted = 0
     while True:
         per_launch = gsz * iters
-        tl = time.time()
+        tl = time.perf_counter()
         n = launch(base, gsz, iters, mask)
-        dt = time.time() - tl
+        dt = time.perf_counter() - tl
         counted += n
         if n > 1024 and not args.test:  # --test expects overflow: its mask is easy
             print(f"WARNING: {n} hits in one launch, only 1024 kept", flush=True)
@@ -272,12 +301,9 @@ def main():
                 proofs += 1
         base += per_launch
         hashes += per_launch
-        if auto:  # aim each launch at the target time: more work when short, less when long
-            if dt > 1.5 * target and iters == 1 and gsz > unit:
-                gsz = max(unit, gsz // 2 // unit * unit)
-            elif dt > 1.25 * target or dt < 0.8 * target:
-                iters = max(1, min(4096, int(iters * target / max(dt, 1e-4))))
-        now = time.time()
+        if auto:  # aim each launch at the target time (autotune.py): at most 8x more work per step
+            gsz, iters = next_launch(gsz, iters, dt, target, unit)
+        now = time.perf_counter()
         if args.test and checked >= 2000:
             expected = hashes / 4096
             rate = hashes / (now - t0) / 1e6

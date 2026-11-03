@@ -9,6 +9,7 @@ sys.path.insert(0, HERE)
 os.environ["PEARL_WALLET"] = "0x00000000000000000000000000000000DeaDBeef"  # dummy: balances and quotes are faked
 import pearl_sell as ps
 ps._submit.safe_stdio()
+ps._submit.find_baw = lambda: "baw"  # every case below replaces ps.baw; main() only needs baw to be found
 
 FAILED = []
 
@@ -586,6 +587,14 @@ expect("run.pid: a running process is alive", alive_running)
 expect("run.pid: UTF-16 and byte-order-mark pid files are read", alive_utf16 and alive_bom)
 expect("run.pid: the process after it exited is not alive", not alive_after)
 expect("run.pid: an unreadable pid file counts as alive", alive_garbage)
+
+# 58. baw not on PATH: refuse at once (never fall back to a bare "baw", which Windows would also look for in
+# python's own folder and the working directory)
+ps._submit.find_baw = lambda: None
+e = Env(300_000)
+err = run("baw not found", e, ["run", "--mode", "now"])
+ps._submit.find_baw = lambda: "baw"
+expect("baw not found: refuses before anything else, nothing sold", err and "baw not found" in err and e.swaps == [])
 
 print("FAILED:", FAILED or "none")
 sys.exit(1 if FAILED else 0)

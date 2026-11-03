@@ -15,13 +15,15 @@ differ between them, and what to do when something does not work.
 | Component | macOS (Apple Silicon) | Linux x86_64 | Windows 11 x64 |
 |---|---|---|---|
 | Miner `miner/miner.py` | tested (M4 Max) | expected, untested: the test machine has no GPU OpenCL runtime, and pocl could not build any kernel there (see below) | tested (NVIDIA RTX 4070 SUPER, AMD Radeon iGPU) |
-| Proof export `submit/export_proofs.py` | tested | tested | tested |
+| Proof export `submit/export_proofs.py` | tested (manual run) | tested (manual run) | tested (manual run) |
 | Submitter `submit/pearl_submit.py` | tested (offline suite, fork simulation) | tested (offline suite) | tested (offline suite) |
 | Seller `submit/pearl_sell.py` | tested (offline suite) | tested (offline suite) | tested (offline suite) |
 | Fork simulation `submit/fork_rehearsal/run_fork.py` | tested: `FORK REHEARSAL: PASS` | expected, untested | expected, untested |
-| Log replay `tools/replay_log.py` | tested | tested | tested |
+| Log replay `tools/replay_log.py` | redaction tested (offline suite); replay itself not run | redaction tested (offline suite) | redaction tested (offline suite) |
 
-The offline suites (`submit/test_submit.py`, `submit/test_sell.py`, `tools/test_replay_log.py`) start real processes,
+"Manual run": `export_proofs.py` re-verified three proofs mined on the Mac, on each system; no automated test covers
+it. The offline suites (`submit/test_submit.py`, `submit/test_sell.py`, `tools/test_replay_log.py`,
+`miner/test_autotune.py`) start real processes,
 take the real journal lock and run a fake `baw` the way the real one is run (through `baw.cmd` on Windows). The real
 `baw` CLI and real transactions were not part of these tests on any system.
 
@@ -32,8 +34,8 @@ Test machines: macOS 27 on an Apple M4 Max (Python 3.14); Ubuntu 24.04 with Linu
 
 | GPU | Status | `--test` | Speed (`--bench`) |
 |---|---|---|---|
-| Apple M4 Max (40-core GPU, unified memory), macOS built-in OpenCL 1.2 | tested | OK | 545–700 MH/s ¹ |
-| NVIDIA GeForce RTX 4070 SUPER, Windows 11, driver 616.92 | tested | OK | 2,070–2,130 MH/s |
+| Apple M4 Max (40-core GPU, unified memory), macOS built-in OpenCL 1.2 | tested | OK | about 700 MH/s ¹ |
+| NVIDIA GeForce RTX 4070 SUPER, Windows 11, driver 616.92 | tested | OK | about 2.0–2.1 GH/s |
 | AMD Radeon iGPU of the Ryzen 9 9950X3D (gfx1036, the small display GPU in the CPU, shares system memory), Windows 11, AMD Adrenalin driver | tested | OK | 31 MH/s |
 | NVIDIA on Linux (proprietary driver) | expected, untested | | |
 | AMD on Linux (ROCm, or Mesa rusticl) | expected, untested | | |
@@ -42,8 +44,8 @@ Test machines: macOS 27 on an Apple M4 Max (Python 3.14); Ubuntu 24.04 with Linu
 | CPU OpenCL runtimes (pocl, Intel CPU runtime) | untested; work only with `--device`, and slowly. Tried on Linux with the pip pocl 3.0 wheel (`pocl-binary-distribution`) on a Ryzen 7 9700X: pocl lists the CPU but cannot build any kernel there, not even a one-line one (`unknown target CPU 'generic'`), so the miner's kernel could not be checked with it | | |
 
 ¹ The Mac's GPU also drove the desktop during the tests, and the rate moved between about 300 and 700 MH/s with
-the other load, for this version and the previous one alike. On the RTX 4070 SUPER this version and the previous one
-measured the same (2,118–2,132 and 2,114–2,116 MH/s in alternating 8-second runs).
+the other load (up to 723 MH/s), for this version and the previous one alike. On the RTX 4070 SUPER this version and the previous one
+measured the same, about 2.1 GH/s, in alternating 8-second runs.
 
 What the kernel needs: OpenCL C 1.2 with 64-bit integers (`ulong`), the `rotate` builtin and a 32-bit global
 `atomic_inc`. All of these are core OpenCL 1.2, so no vendor extension is used. GPUs with unified memory (Apple
@@ -66,7 +68,8 @@ python3 miner/miner.py --launch-ms 100 ...     # shorter kernel launches (defaul
   must finish every launch quickly, or the operating system resets it (Windows: "TDR" after 2 s; macOS has a similar
   watchdog). `--iters N` fixes the work per launch instead, and `--global-size` sets the number of work-items.
 - `--test` mines with an easy target, re-checks 2000 GPU hits on the CPU and compares the number of hits the GPU
-  counted with the number expected; it prints the speed. Run it once on every new machine.
+  counted with the number expected; it prints the speed. Run it once on every new machine. It ends after a few short
+  launches, before the launch size has grown to `--launch-ms`, so its speed is lower than `--bench`.
 
 ## Setup
 
@@ -85,7 +88,8 @@ brew install python node                        # or the python.org installer
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r miner/requirements.txt
 npm install -g @binance/agentic-wallet          # baw
-curl -L https://foundry.paradigm.xyz | bash && foundryup   # anvil, for the fork simulation
+curl -L https://foundry.paradigm.xyz | bash   # anvil, for the fork simulation; then open a new terminal
+foundryup                                      # (the installer adds ~/.foundry/bin to PATH for new shells only)
 python3 miner/miner.py --list-devices
 ```
 
@@ -111,7 +115,8 @@ the OpenCL part of your GPU driver:
   cards ROCm does not support, Mesa's rusticl (`mesa-opencl-icd`, then `export RUSTICL_ENABLE=radeonsi`) may work.
 - Intel: `intel-opencl-icd`.
 
-Node.js for `baw`: your distribution's package, or [nodejs.org](https://nodejs.org). `anvil`: `foundryup` as on macOS.
+Node.js for `baw`: your distribution's package, or [nodejs.org](https://nodejs.org). `anvil`: the Foundry installer
+and then, in a new terminal, `foundryup`, as on macOS.
 
 ### Windows 10 / 11 (PowerShell)
 
@@ -130,6 +135,9 @@ python miner\miner.py --list-devices
 - Use Python 3.11 or later: before 3.11, `time.sleep` on Windows can oversleep by up to about 15 ms; from 3.11 on it
   uses a high-resolution timer.
 - npm installs `baw` as `baw.cmd`. The tools look it up on `PATH` themselves; open a new terminal after installing.
+  Windows runs a `.cmd` through cmd.exe, so the tools refuse a `baw.cmd` whose folder contains `%`, `!` or `"`
+  (or, in a folder name without spaces, `& | < > ^ ( ) ; , =`). If yours does, move npm's global folder:
+  `npm config set prefix C:\npm-global`, add that folder to PATH, and install `baw` again.
 - Keep the clock in sync, because the submitter times its first preview against the chain: run `w32tm /resync` (as
   administrator) before the opening and look at the `local clock - block ts` line of `check`.
 - Optional: `$env:PYTHONUTF8 = "1"` makes Python use UTF-8 everywhere. The tools already write their logs and
@@ -201,8 +209,9 @@ Remove-Item submit\STOP                    # before the next start
 
 The STOP file is the way to stop on every system: the run finishes the step it is in, writes its journal and its
 summary, and exits. For the submitter, Ctrl-C in its own terminal does the same. On Windows, do not use `Stop-Process` or Task
-Manager: they kill the process at once (no summary), and in a virtual environment they kill only the launcher while
-the run itself goes on.
+Manager: they end the whole run at once (in a virtual environment the launcher takes the real interpreter down with
+it), with no summary, and a `baw` call that was in progress may still complete after the run is gone. Its journal is
+safe (every record is on disk before the next step), but you lose the stop record and the summary.
 
 ### Mine in the background
 
@@ -262,4 +271,5 @@ Run "Install Certificates.command" from the Python folder in Applications.
 **`another run already holds ... journal.jsonl`**
 
 A second submitter is running on the same journal: stop that one first. The lock is released when a run exits, even
-if it crashed. On Windows the lock lives in `journal.jsonl.lock`; the file may stay behind and is harmless.
+if it crashed. It belongs to the journal file itself, so a second run is refused however it names the file, and
+nothing is left behind.

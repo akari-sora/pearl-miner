@@ -21,8 +21,10 @@ Every GPU hit is re-hashed on the CPU before it is appended (and fsynced) to `pr
   counted with the number expected.
 - `--list-devices` / `--device N` choose among all OpenCL devices (default: the first NVIDIA GPU, else the first GPU).
   Each launch is sized to about `--launch-ms` (250 ms), so a GPU that drives a display stays clear of the Windows
-  and macOS watchdogs. See [PLATFORMS.md](PLATFORMS.md) for the vendors and systems tested.
-- `--bench 20` reports the hash rate. An RTX 4070 SUPER does about 2,040 MH/s, which is roughly 1.9 proofs per
+  and macOS watchdogs: `miner/autotune.py` times launches with `perf_counter`, never grows the work on a launch
+  measured at under 0.1 ms, and at most 8x per step. See [PLATFORMS.md](PLATFORMS.md) for the vendors and systems
+  tested.
+- `--bench 20` reports the hash rate. An RTX 4070 SUPER does about 2.0–2.1 GH/s, which is roughly 1.9 proofs per
   second or 6,800 per hour at stage 0.
 - Create the file `STOP` next to the output to stop it cleanly.
 
@@ -144,8 +146,9 @@ minus everything in flight stays above `--keep-bnb`.
 ### The journal
 
 `journal.jsonl` is append-only; every record is written with `flush` + `fsync`. The run takes an exclusive,
-non-blocking lock on it (`flock` on macOS and Linux; on Windows a byte lock on `journal.jsonl.lock`, since Windows
-byte locks would also block reading the journal), so a second sender on the same journal refuses to start.
+non-blocking lock on the file itself (`flock` on macOS and Linux; on Windows a byte lock at offset 2^40 through a
+second handle, far past any data, because Windows byte locks also block reads of the bytes they cover), so a second
+sender on the same journal refuses to start, whatever path it uses.
 
 | Event | Meaning on replay |
 |---|---|
@@ -201,6 +204,7 @@ files together.
 | Harness | What it proves |
 |---|---|
 | `submit/test_submit.py` | the submitter against a fake chain and a fake `baw`: cap filling, risk items, execute timeouts, restarts from the journal, backend lag at the opening, transient errors, gas budget, `351716`, near-cap splitting, a second sender, a disconnected session, input checks (wallet and EIP-55, handle, `--min-reward`, `--day`), `check` on day 43 without a proofs file, and more. No proof is ever sent twice. |
+| `miner/test_autotune.py` | the miner's launch sizing without a GPU: a launch timed at 0 s, a negative or tiny time never grows the work, growth is at most 8x per step, and simulated devices from 2 MH/s to 10 GH/s never get a launch near the 2 s Windows watchdog. |
 | `submit/test_sell.py` | the seller against a constant-liquidity pool model calibrated on the real pool: impact cap, schedule, pullbacks, partial fills, refunds, lagging balance reads, timeouts, restarts, a `--wallet` that is not the wallet `baw` is signed in to. |
 | `submit/fork_rehearsal/run_fork.py` | the real contract on an anvil fork of BSC. Your wallet is impersonated (no key), a fake `baw` turns preview / execute into `eth_call` / `eth_sendTransaction` on `127.0.0.1` only (the script refuses a local port that is already in use and stops at once if anvil exits while starting), the day before the target is set full so nothing can be mined early, the next day opens live 30 s after the start and a competitor eats the cap. It then checks that every proof in a successful transaction is used on chain, that the journal replays to nothing reserved or open, that the fees in the journal equal the balance spent, and that the run stopped because the cap was full. |
 | `tools/replay_log.py` | replays a run log with its original timing; `--anonymize` masks every hex value of 4+ digits after `0x`/`0X` (also cut-off ones), bare hex runs of 40+ characters, the handle in `keccak256('…')`, the local date and time, block numbers in any form, `check`'s block timestamp and e-mail addresses, replaces clock times with the time since the opening, removes block numbers and rounds BNB amounts. It hides values, not the run: the opening time is public, so the timing and the number of transactions can still be matched against the chain. `tools/test_replay_log.py` checks these rules offline. `run_fork.py --anonymize` applies the same rules live, for recordings. |

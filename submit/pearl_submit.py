@@ -224,17 +224,21 @@ def safe_stdio():
             pass
 
 
+WIN_LOCK_AT = 1 << 40  # Windows: the locked byte, far past any journal data (byte locks also block reads there)
+
+
 class SenderLock:
     """Keeps a second sender off a journal: exclusive and non-blocking (OSError while another holder has it),
-    released by release() or when the process exits.
-    POSIX: flock on the journal file itself. Windows: msvcrt.locking on byte 0 of <journal>.lock, because Windows
-    byte locks also block reads and the journal is read again while it is held."""
+    released by release() or when the process exits. The lock belongs to the file itself, so another spelling of
+    its path (relative, symlink, 8.3 name) meets the same lock.
+    POSIX: flock on the journal's open file. Windows: msvcrt.locking on one byte at WIN_LOCK_AT, through a second
+    handle on the journal; Windows byte locks are mandatory, and none of the journal's data is ever at that offset."""
 
     def __init__(self, journal):
         if WINDOWS:
-            fd = os.open(journal.path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+            fd = os.open(journal.path, os.O_RDWR | getattr(os, "O_BINARY", 0))
             try:
-                os.lseek(fd, 0, os.SEEK_SET)
+                os.lseek(fd, WIN_LOCK_AT, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             except OSError:
                 os.close(fd)
@@ -242,7 +246,7 @@ class SenderLock:
         else:
             fd = journal.f.fileno()
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        self.fd, self.journal = fd, journal  # the journal's open file carries the POSIX lock: keep it open
+        self.fd, self.journal = fd, journal  # POSIX: the journal's open file carries the lock, keep it open
 
     def release(self):
         fd, self.fd = self.fd, None
@@ -250,7 +254,7 @@ class SenderLock:
             return
         if WINDOWS:
             try:
-                os.lseek(fd, 0, os.SEEK_SET)
+                os.lseek(fd, WIN_LOCK_AT, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             finally:
                 os.close(fd)
@@ -259,11 +263,24 @@ class SenderLock:
 
 
 BAW = None  # full path of the baw CLI, set by main() with find_baw(); None runs plain "baw"
-_CMD_SAFE = re.compile(r"[A-Za-z0-9_.,:=+/@-]*\Z")
+UNSAFE_ARG = "UNSAFE_ARG"  # error code of a baw call refused before any process was started
+_CMD_SAFE = re.compile(r"[A-Za-z0-9_.,:=+/@-]+\Z")  # one or more of these, nothing else (\Z: not even a newline)
+# cmd.exe would expand % and ! even inside the quotes subprocess puts around a path with spaces; a path without
+# spaces is not quoted, and then & | < > ^ ( ) ; , = split it too
+_CMD_PATH_BAD_QUOTED = re.compile(r'[%!"]')
+_CMD_PATH_BAD_BARE = re.compile(r'[&|<>^%!"();,=]')
 
 
 class UnsafeArg(Exception):
-    """An argument cmd.exe would interpret; never passed to a .cmd/.bat shim."""
+    """An argument (or a baw path) cmd.exe would interpret; never handed to a .cmd/.bat shim."""
+
+
+def cmd_path_problem(path):
+    """Why cmd.exe would misread this .cmd/.bat path, or None."""
+    path = path or ""
+    rx = _CMD_PATH_BAD_QUOTED if (" " in path or "\t" in path) else _CMD_PATH_BAD_BARE
+    bad = sorted(set(rx.findall(path)))
+    return f"cmd.exe would misread its path ({' '.join(bad)})" if bad else None
 
 
 def find_baw():
@@ -287,6 +304,9 @@ def baw_cmd(args):
     spaces: such arguments are refused (UnsafeArg). baw arguments here are flags, hex and numbers."""
     exe = BAW or "baw"
     if WINDOWS and exe.lower().endswith((".cmd", ".bat")):
+        why = cmd_path_problem(exe)
+        if why:
+            raise UnsafeArg(f"baw at {exe}: {why}")
         bad = [x for x in args if not _CMD_SAFE.match(str(x))]
         if bad:
             raise UnsafeArg(f"argument not safe to pass through cmd.exe: {bad[0]!r}")
@@ -294,17 +314,29 @@ def baw_cmd(args):
 
 
 def start_baw(args, own_group=False):
-    """Start baw with UTF-8 pipes. own_group: Ctrl-C in the terminal does not reach it (POSIX: a new session;
-    Windows: a new process group), so a call in flight is never cut off by it."""
-    kw = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-    if own_group:
-        kw.update(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) if WINDOWS else kw.update(start_new_session=True)
-    return subprocess.Popen(baw_cmd(args), **kw)
+    """Start baw with UTF-8 pipes and no stdin. own_group: the terminal's Ctrl-C (and on Windows Ctrl-Break and
+    closing the console) does not reach it, so a call in flight finishes. POSIX: a new session. Windows: a new
+    process group with its own hidden console (CREATE_NO_WINDOW), detached from ours."""
+    kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+              errors="replace")
+    if own_group and WINDOWS:
+        kw.update(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
+    elif own_group:
+        kw.update(start_new_session=True)
+    p = subprocess.Popen(baw_cmd(args), **kw)
+    p.pearl_own_group = own_group
+    return p
 
 
 def kill_tree(p):
     """Kill a baw process and its children. On Windows baw.cmd runs cmd.exe -> node.exe; killing cmd.exe alone
-    would leave node.exe holding the output pipes."""
+    would leave node.exe holding the output pipes. On POSIX a baw in its own session is killed as a group."""
+    if not WINDOWS and getattr(p, "pearl_own_group", False):
+        try:
+            if os.getpgid(p.pid) == p.pid:  # its own group (start_new_session), never ours
+                os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
     if WINDOWS:
         tk = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
         try:
@@ -583,7 +615,7 @@ def baw(args, journal=None, timeout=60, launch_lock=None, gate=None):
     except subprocess.TimeoutExpired:
         j = {"success": False, "error": {"code": "TIMEOUT", "message": f"baw {args[:2]} > {timeout}s"}}
     except UnsafeArg as e:
-        j = {"success": False, "error": {"code": "UNSAFE_ARG", "message": str(e)}}
+        j = {"success": False, "error": {"code": UNSAFE_ARG, "message": str(e)}}
     except ValueError:
         j = {"success": False, "error": {"code": "BAD_JSON", "message": (out + err)[-800:]}}
     except OSError as e:
@@ -618,12 +650,16 @@ def judge_preview(j):
             return "sim", msg[:200]
         if code == BUSY_CODE:
             return "busy", msg[:200]
+        if code == UNSAFE_ARG:  # before the transient check: its message may contain anything
+            return "refuse", f"{code} {msg}"[:300]
         if code in TRANSIENT_CODES or TRANSIENT_TEXT.search(msg):
             return "transient", f"{code} {msg}"[:300]
         return "refuse", f"error {code} {err.get('name', '')} {msg}"[:300]
     d = j.get("data")
     if not isinstance(d, dict) or not isinstance(d.get("requestId"), str) or not d["requestId"]:
         return "refuse", "preview without requestId"
+    if not _CMD_SAFE.match(d["requestId"]):  # on every OS, so a rehearsal elsewhere predicts Windows (cmd.exe)
+        return "refuse", f"requestId {d['requestId'][:80]!r} is not a plain token: refusing it before any execute"
     if d.get("requireConfirmation") is not False:
         return "refuse", f"requireConfirmation={d.get('requireConfirmation')!r} (needs Binance App approval)"
     risks = d.get("risks")
@@ -697,7 +733,7 @@ def blocked_from_journal(recs):
             attempt_proofs[r.get("requestId")] = frozenset(prs)
         elif ev == "used_elsewhere":
             used.update(prs)
-        elif ev == "exec_rejected":  # 351716 / stopped before execute: nothing was sent
+        elif ev == "exec_rejected":  # 351716 / stopped or refused before execute: nothing was sent
             blocked.difference_update(prs)
             open_attempts.pop(r.get("requestId"), None)
         elif ev == "exec_unknown":
@@ -1432,6 +1468,11 @@ class Runner:
             self.requeue_ready(batch, rid, gas_limit, exp)  # diagnosis running or estimate moved
             time.sleep(0.05)
             return "continue"
+        if code == UNSAFE_ARG:  # refused before any process started: provably not sent
+            self.j.write(ev="exec_rejected", requestId=rid, proofs=proofs, code=UNSAFE_ARG)
+            self.give_back(batch)
+            self.stop(f"execute refused before launch: {err_of(ej).get('message', '')}"[:300])
+            return "break"
         if code == BUSY_CODE:
             # rehearsal on 2026-11-03: concurrent executes got 351716 and were not sent
             # (the wallet nonce did not move). The previous tx is still in progress at the backend.
@@ -1695,6 +1736,9 @@ def main():
     if not BAW:
         sys.exit("baw not found on PATH" + (" (Windows: baw.cmd from `npm install -g`; see docs/PLATFORMS.md)"
                                             if WINDOWS else ""))
+    if WINDOWS and BAW.lower().endswith((".cmd", ".bat")) and cmd_path_problem(BAW):
+        sys.exit(f"baw is at {BAW}, but {cmd_path_problem(BAW)}: move npm's global folder (npm config set prefix) "
+                 "to a path without these characters; see docs/PLATFORMS.md")
     {"check": cmd_check, "rehearse": cmd_rehearse, "run": cmd_run}[a.cmd](a)
 
 
