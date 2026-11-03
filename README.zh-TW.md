@@ -19,6 +19,22 @@
 
 ---
 
+## 一鍵開始
+
+挖好 proof 之後，開放前執行一行：
+
+```bash
+python3 pearl.py auto
+```
+
+它會檢查錢包和 proof、列出計畫（開放時間、Gas 上限、賣出比例），你輸入 `yes` 之後就不用管：等到開放、自動送單、額度滿了自動停，再自動賣出這次新挖到幣的 80%（`--sell off` 可關閉；只在正常結束時才賣，原本持有的幣不會被賣）。
+
+- 新手照做：[docs/QUICKSTART.zh-TW.md](docs/QUICKSTART.zh-TW.md)
+- 交給 AI Agent（Claude Code、Codex、Grok Bot 等）：[docs/AGENTS-SETUP.zh-TW.md](docs/AGENTS-SETUP.zh-TW.md)，skill 在 [skills/pearl-miner/SKILL.md](skills/pearl-miner/SKILL.md)
+- macOS、Windows、Linux 與各種顯示卡：[docs/PLATFORMS.zh-TW.md](docs/PLATFORMS.zh-TW.md)
+
+---
+
 ## 這是什麼
 
 - **代幣是什麼**：[PearlMiningV2](docs/CONTRACT.md)（代幣名稱與代號都是「**珍珠币**」）是 BNB Smart Chain（BSC，幣安智能鏈）上的工作量證明（PoW）代幣。持有幣安 **[Agent ID](#名詞對照表)** 的人，可以先在鏈下用顯示卡（GPU）算出合格解答（稱為 **[proof](#名詞對照表)**），再上鏈領幣，每筆交易最多打包 **16 個 proof**。

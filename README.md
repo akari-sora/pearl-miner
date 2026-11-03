@@ -19,6 +19,22 @@ English · [繁體中文](README.zh-TW.md)
 
 ---
 
+## One-command start
+
+With proofs mined, run one line before the opening:
+
+```bash
+python3 pearl.py auto
+```
+
+It checks the wallet and the proofs and shows the plan (opening time, gas cap, sale share). After you type `yes` it runs on its own: it waits for the opening, submits, stops when the day's cap is full, then sells 80% of the coins this run mined (`--sell off` turns that off; it sells only after a normal finish and never sells coins you already held).
+
+- Step by step: [docs/QUICKSTART.md](docs/QUICKSTART.md)
+- With an AI agent (Claude Code, Codex, Grok Bot, ...): [docs/AGENTS-SETUP.md](docs/AGENTS-SETUP.md); the skill is [skills/pearl-miner/SKILL.md](skills/pearl-miner/SKILL.md)
+- macOS, Windows, Linux and GPUs: [docs/PLATFORMS.md](docs/PLATFORMS.md)
+
+---
+
 ## What it is
 
 - **The token**: [PearlMiningV2](docs/CONTRACT.md) (token name and symbol: **珍珠币**) is a proof-of-work (PoW) token on BNB Smart Chain (BSC). Holders of a Binance **[Agent ID](#glossary)** use a graphics card (GPU) to compute valid hash solutions off-chain (called **[proofs](#glossary)**) and claim coins on-chain, packing up to **16 proofs** per transaction.
