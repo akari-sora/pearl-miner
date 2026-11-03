@@ -14,7 +14,7 @@ pearl-miner 只用 Python 加上一段 OpenCL 程式（在顯示卡上算雜湊�
 
 | 元件 | macOS（Apple 晶片） | Linux x86_64 | Windows 11 x64 |
 |---|---|---|---|
-| 挖礦程式 `miner/miner.py` | 已測試（M4 Max） | 應該可用，未測試：測試機沒有裝 OpenCL 驅動 | 已測試（NVIDIA RTX 4070 SUPER、AMD Radeon 內顯） |
+| 挖礦程式 `miner/miner.py` | 已測試（M4 Max） | 應該可用，未測試：測試機沒有顯示卡的 OpenCL 驅動，pocl 在那台也編譯不了任何 kernel（見下表） | 已測試（NVIDIA RTX 4070 SUPER、AMD Radeon 內顯） |
 | 匯出證明 `submit/export_proofs.py` | 已測試 | 已測試 | 已測試 |
 | 送單程式 `submit/pearl_submit.py` | 已測試（離線測試、分叉模擬） | 已測試（離線測試） | 已測試（離線測試） |
 | 賣幣程式 `submit/pearl_sell.py` | 已測試（離線測試） | 已測試（離線測試） | 已測試（離線測試） |
@@ -39,7 +39,7 @@ Ryzen 9 9950X3D 加 RTX 4070 SUPER 的 Windows 11（Python 3.11，NVIDIA 驅動 
 | Linux 上的 AMD（ROCm，或 Mesa 的 rusticl） | 應該可用，未測試 | | |
 | Windows 上的 AMD Ryzen AI 處理器內顯（例如 HX 370，共用記憶體） | 應該可用，未測試 | | |
 | Intel Arc / Iris Xe（Windows、Linux） | 應該可用，未測試 | | |
-| 用 CPU 跑 OpenCL（pocl、Intel CPU runtime） | 應該可用，未測試；要用 `--device` 指定，而且很慢 | | |
+| 用 CPU 跑 OpenCL（pocl、Intel CPU runtime） | 未測試；要用 `--device` 指定，而且很慢。在 Linux 的 Ryzen 7 9700X 上試過 pip 版 pocl 3.0（`pocl-binary-distribution`）：pocl 看得到 CPU，但連一行的小程式都編譯不了（`unknown target CPU 'generic'`），所以沒辦法用它驗證挖礦的 kernel | | |
 
 ¹ 測試時這台 Mac 的 GPU 同時在顯示桌面，速度隨其他負載在約 300 到 700 MH/s 之間變動，新舊版本都一樣。
 在 RTX 4070 SUPER 上新舊版本速度相同（交替各跑 8 秒：新版 2,118–2,132、舊版 2,114–2,116 MH/s）。
@@ -220,7 +220,8 @@ Start-Process -FilePath python -ArgumentList "miner\miner.py", "--out", "miner\p
 
 **顯示卡程式編譯失敗（`OpenCL kernel build failed`）**
 
-錯誤訊息裡會附上編譯器的紀錄。先更新顯示卡驅動；再用 `--device` 換一個裝置試試（CPU 裝置也能編譯，只是很慢）。
+錯誤訊息裡會附上編譯器的紀錄。先更新顯示卡驅動。如果是用 pocl 的 CPU 裝置，而紀錄寫著 `unknown target CPU 'generic'`，
+代表那個 pocl 版本不認得你的 CPU，任何程式都編譯不了，不是這段 kernel 的問題。接著再用 `--device` 換一個裝置試試（CPU 的 OpenCL 裝置也可能可以，只是很慢）。
 回報問題時請附上這段紀錄，以及 `--list-devices` 顯示的裝置名稱和驅動版本。
 
 **螢幕凍結或閃一下、Windows 跳出「顯示器驅動程式已停止回應，並已成功復原」、出現 `OUT_OF_RESOURCES` 或 `-36`

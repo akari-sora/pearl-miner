@@ -14,7 +14,7 @@ differ between them, and what to do when something does not work.
 
 | Component | macOS (Apple Silicon) | Linux x86_64 | Windows 11 x64 |
 |---|---|---|---|
-| Miner `miner/miner.py` | tested (M4 Max) | expected, untested: the test machine has no OpenCL runtime | tested (NVIDIA RTX 4070 SUPER, AMD Radeon iGPU) |
+| Miner `miner/miner.py` | tested (M4 Max) | expected, untested: the test machine has no GPU OpenCL runtime, and pocl could not build any kernel there (see below) | tested (NVIDIA RTX 4070 SUPER, AMD Radeon iGPU) |
 | Proof export `submit/export_proofs.py` | tested | tested | tested |
 | Submitter `submit/pearl_submit.py` | tested (offline suite, fork simulation) | tested (offline suite) | tested (offline suite) |
 | Seller `submit/pearl_sell.py` | tested (offline suite) | tested (offline suite) | tested (offline suite) |
@@ -39,7 +39,7 @@ Test machines: macOS 27 on an Apple M4 Max (Python 3.14); Ubuntu 24.04 with Linu
 | AMD on Linux (ROCm, or Mesa rusticl) | expected, untested | | |
 | AMD Ryzen AI APUs on Windows (e.g. HX 370, unified memory) | expected, untested | | |
 | Intel Arc / Iris Xe (Windows, Linux) | expected, untested | | |
-| CPU OpenCL runtimes (pocl, Intel CPU runtime) | expected, untested; works only with `--device`, and slowly | | |
+| CPU OpenCL runtimes (pocl, Intel CPU runtime) | untested; work only with `--device`, and slowly. Tried on Linux with the pip pocl 3.0 wheel (`pocl-binary-distribution`) on a Ryzen 7 9700X: pocl lists the CPU but cannot build any kernel there, not even a one-line one (`unknown target CPU 'generic'`), so the miner's kernel could not be checked with it | | |
 
 ¹ The Mac's GPU also drove the desktop during the tests, and the rate moved between about 300 and 700 MH/s with
 the other load, for this version and the previous one alike. On the RTX 4070 SUPER this version and the previous one
@@ -230,8 +230,9 @@ Start-Process -FilePath python -ArgumentList "miner\miner.py", "--out", "miner\p
 
 **The kernel does not build (`OpenCL kernel build failed`)**
 
-The message includes the compiler's log. Update the GPU driver first. Then try another device with `--device`
-(a CPU device also builds it, slowly), and report the log with the device name and driver version from
+The message includes the compiler's log. Update the GPU driver first. If the log says `unknown target CPU 'generic'`
+on a pocl CPU device, that pocl build does not know your CPU and builds no kernel at all; it is not this kernel. Then try another device with `--device`
+(a CPU OpenCL device can work too, slowly), and report the log with the device name and driver version from
 `--list-devices`.
 
 **The screen freezes or flickers, "Display driver stopped responding and has recovered" (Windows), errors such as
