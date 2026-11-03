@@ -159,6 +159,18 @@ The summary shows the proofs mined, the gas spent, the coins sold and the BNB re
 | 3 | The run did not end with a summary. | `python3 pearl.py status`, then start the same command again: the journal keeps any proof that may have been sent from being sent twice. |
 | 4 | Mining finished, but the sale was skipped or stopped. | Sell by hand when you are ready: `python3 submit/pearl_sell.py run --mode now --keep-coins N`, where N is the number of coins to keep. |
 
+## Check the code yourself (optional)
+
+Five offline test suites need no network, no wallet and no GPU. Each must end with `FAILED: none`:
+
+```sh
+python3 submit/test_submit.py          # the submitter against a fake chain and a fake baw
+python3 submit/test_sell.py            # the seller against a pool model
+python3 tools/test_replay_log.py       # log redaction
+python3 tools/test_pearl_autopilot.py  # pearl.py with fake child scripts
+python3 miner/test_autotune.py         # the miner's launch sizing, no GPU needed
+```
+
 ## Hand it to your AI agent
 
 You can give this job to a coding agent such as Claude Code, Codex or Cursor. Copy the prompt below into your

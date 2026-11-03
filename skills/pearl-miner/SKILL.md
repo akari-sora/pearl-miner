@@ -148,8 +148,22 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | `requireConfirmation`, or a preview risk stop | The wallet wants approval in the Binance App, or flagged a risk. | Stop and tell the user. Never work around it. |
 | `InvalidSolution` (around day 4 or later) | The difficulty went up. | Filter the proofs; see `docs/CONTRACT.md`, "Difficulty stages". |
 | fork: port in use, or `anvil` not found | Another node, or Foundry missing. | Pass `--port`, or install Foundry. |
+| `UNSAFE_ARG` | On Windows, a value for `baw` (a `.cmd` shim) that cmd.exe could misread; nothing was sent. | Stop and tell the user. Never work around it. |
 | exit 3 | The run ended without a summary. | `python3 pearl.py status`; then run the same command again. The journal never sends a proof twice. |
 | exit 4 | Mining finished; the sale was skipped or stopped. | Tell the user. Sell later only with their ok: `python3 submit/pearl_sell.py run --mode now --keep-coins N`. |
+
+## Offline tests (optional)
+
+To check the code itself, run the five offline suites in the clone (no network, no wallet, no GPU); each must end
+with `FAILED: none`:
+
+```sh
+python3 submit/test_submit.py          # the submitter against a fake chain and a fake baw
+python3 submit/test_sell.py            # the seller against a pool model
+python3 tools/test_replay_log.py       # log redaction
+python3 tools/test_pearl_autopilot.py  # pearl.py with fake child scripts
+python3 miner/test_autotune.py         # the miner's launch sizing, no GPU needed
+```
 
 ## Risks (tell the user before the first run)
 

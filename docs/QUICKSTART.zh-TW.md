@@ -148,6 +148,18 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | 3 | 送單沒有正常結束（沒有總結）。 | 先 `python3 pearl.py status`，再執行同一個指令：journal 會擋住可能已送出的 proof，不會重複送。 |
 | 4 | 挖礦結束了，但賣出被跳過或中途停止。 | 準備好時手動賣：`python3 submit/pearl_sell.py run --mode now --keep-coins N`，N 是要保留的幣數。 |
 
+## 自己檢查程式（選用）
+
+五套離線測試不需要網路、錢包或 GPU。每一套最後都必須是 `FAILED: none`：
+
+```sh
+python3 submit/test_submit.py          # 送單器：假的鏈與假的 baw
+python3 submit/test_sell.py            # 賣出器：池子模型
+python3 tools/test_replay_log.py       # 紀錄檔遮蔽
+python3 tools/test_pearl_autopilot.py  # pearl.py：假的子程式
+python3 miner/test_autotune.py         # 礦機的批次大小調整，不需要 GPU
+```
+
 ## 交給你的 AI agent
 
 你可以把這件事交給 Claude Code、Codex 或 Cursor 這類程式 agent。把下面的提示詞貼給你的 agent（也可以改成你自己的話）。

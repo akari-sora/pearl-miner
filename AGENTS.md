@@ -49,9 +49,9 @@ yourself unless the user asks: `pearl.py` sets up `run.pid`, the logs and the am
   `execute`, `SenderLock`, and the replay on restart. A proof in an attempt stays blocked until a receipt proves
   that its transaction reverted.
 - **Gate logic**:
-  - in `pearl_submit.py`: `judge_preview` (risk items, `requireConfirmation`, simulation), the `launch_lock` and
-    gate check before each `execute`, `Runner.stop` / `stopped`, the opening-grace rules (`after_sim_failure`,
-    `confirm_backend_lag`), the budget and keep-reserve stops, and `--executors 1`;
+  - in `pearl_submit.py`: `judge_preview` (risk items, `requireConfirmation`, simulation, `UNSAFE_ARG`), the
+    `launch_lock` and gate check before each `execute`, `Runner.stop` / `stopped`, the opening-grace rules
+    (`after_sim_failure`, `confirm_backend_lag`), the budget and keep-reserve stops, and `--executors 1`;
   - in `pearl_sell.py`: the refusals on `run.pid`, on pending orders and on a wallet other than the signed-in one;
   - in `pearl.py`: the `CHECK OK` gate, the `yes` confirmation, the `STOP` checks, and "no `SUMMARY` line, no sale".
 
@@ -59,13 +59,15 @@ If one of these seems wrong, stop and explain it to the user instead of changing
 
 ## Tests
 
-Offline, no network and no wallet. Each must end with `FAILED: none`; run all of them after any change.
+Five offline suites: no network, no wallet, no GPU. Each must end with `FAILED: none`; run all five after any
+change.
 
 ```sh
 python3 submit/test_submit.py          # the submitter against a fake chain and a fake baw
 python3 submit/test_sell.py            # the seller against a pool model
 python3 tools/test_replay_log.py       # log redaction
 python3 tools/test_pearl_autopilot.py  # pearl.py with fake child scripts
+python3 miner/test_autotune.py         # the miner's launch sizing, no GPU needed
 ```
 
 End to end: `python3 submit/fork_rehearsal/run_fork.py --autopilot`. It needs Foundry's `anvil` and a public BSC
