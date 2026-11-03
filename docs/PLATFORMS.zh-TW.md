@@ -18,15 +18,17 @@ pearl-miner 只用 Python 加上一段 OpenCL 程式（在顯示卡上算雜湊�
 | 匯出證明 `submit/export_proofs.py` | 已測試（手動執行） | 已測試（手動執行） | 已測試（手動執行） |
 | 送單程式 `submit/pearl_submit.py` | 已測試（離線測試、分叉模擬） | 已測試（離線測試） | 已測試（離線測試） |
 | 賣幣程式 `submit/pearl_sell.py` | 已測試（離線測試） | 已測試（離線測試） | 已測試（離線測試） |
-| 一行指令 `pearl.py` | 已測試（離線測試，含真的 STOP 和 Ctrl-C；分叉模擬，`--sell off`） | 已測試（離線測試，含真的 STOP 和 Ctrl-C） | 已測試（離線測試，含真的 STOP 和 CTRL_C_EVENT） |
+| 一行指令 `pearl.py` | 已測試（離線測試；端對端搭配真的送單器與賣出器、真的 STOP 和 Ctrl-C；分叉模擬，`--sell off`） | 已測試（離線測試；端對端，含真的 STOP 和 Ctrl-C） | 已測試（離線測試；端對端，含真的 STOP 和 CTRL_C_EVENT，轉成 CTRL_BREAK_EVENT 送給子程式） |
 | 分叉模擬 `submit/fork_rehearsal/run_fork.py` | 已測試：`FORK REHEARSAL: PASS` | 應該可用，未測試 | 應該可用，未測試 |
 | 紀錄重播 `tools/replay_log.py` | 打碼功能已測試（離線測試）；重播本身沒有跑 | 打碼功能已測試（離線測試） | 打碼功能已測試（離線測試） |
 
 「手動執行」是指在每個系統上用 `export_proofs.py` 重新驗證了三個在 Mac 上挖到的證明，沒有自動測試涵蓋它。
-其中四套離線測試（`submit/test_submit.py`、`submit/test_sell.py`、`tools/test_replay_log.py`、
-`tools/test_pearl_autopilot.py`）會真的啟動程式、真的上鎖，也會用一個假的 `baw`，照真的 `baw` 的方式去呼叫它
-（Windows 上是透過 `baw.cmd`）；`tools/test_pearl_autopilot.py` 還會對 pearl.py 送出真的 Ctrl-C。第五套
-`miner/test_autotune.py` 只檢查礦機調整批次大小的計算：不啟動程式、不上鎖，也不需要 GPU。這次測試在任何系統上都**沒有**
+其中五套離線測試（`submit/test_submit.py`、`submit/test_sell.py`、`tools/test_replay_log.py`、
+`tools/test_pearl_autopilot.py`、`tools/test_pearl_e2e.py`）會真的啟動程式、真的上鎖，也會用一個假的 `baw`，
+照真的 `baw` 的方式去呼叫它（Windows 上是透過 `baw.cmd`）。`tools/test_pearl_e2e.py` 讓 pearl.py 以真的送單器和
+賣出器當子程式（只有鏈、市場和代幣餘額是假的），並對 pearl.py 送出真的 Ctrl-C；在 Windows 上是對主控台送
+CTRL_C_EVENT，再由 pearl.py 轉成 CTRL_BREAK_EVENT 送給子程式。第六套 `miner/test_autotune.py` 檢查礦機調整批次大小
+的計算，只在檢查缺套件的提示時才啟動 `miner.py`：不上鎖，也不需要 GPU。這次測試在任何系統上都**沒有**
 用真的 `baw`，也沒有送出任何真的交易。
 
 測試機：Apple M4 Max 上的 macOS 27（Python 3.14）；Ryzen 7 9700X 上的 Ubuntu 24.04、Linux 7.0（Python 3.12）；

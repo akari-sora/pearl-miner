@@ -172,14 +172,15 @@ The summary shows the proofs mined, the gas spent, the coins sold and the BNB re
 
 ## Check the code yourself (optional)
 
-Five offline test suites need no network, no wallet and no GPU. Each must end with `FAILED: none`:
+Six offline test suites need no network, no wallet and no GPU. Each must end with `FAILED: none`:
 
 ```sh
 python3 submit/test_submit.py          # the submitter against a fake chain and a fake baw
 python3 submit/test_sell.py            # the seller against a pool model
 python3 tools/test_replay_log.py       # log redaction
 python3 tools/test_pearl_autopilot.py  # pearl.py with fake child scripts
-python3 miner/test_autotune.py         # the miner's launch sizing, no GPU needed
+python3 tools/test_pearl_e2e.py        # pearl.py with the real submitter and seller, real STOP and Ctrl-C (~1 min)
+python3 miner/test_autotune.py         # the miner's launch sizing and its missing-package message; no GPU needed
 ```
 
 ## Hand it to your AI agent

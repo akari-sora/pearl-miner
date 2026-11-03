@@ -158,14 +158,15 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 
 ## 自己檢查程式（選用）
 
-五套離線測試不需要網路、錢包或 GPU。每一套最後都必須是 `FAILED: none`：
+六套離線測試不需要網路、錢包或 GPU。每一套最後都必須是 `FAILED: none`：
 
 ```sh
 python3 submit/test_submit.py          # 送單器：假的鏈與假的 baw
 python3 submit/test_sell.py            # 賣出器：池子模型
 python3 tools/test_replay_log.py       # 紀錄檔遮蔽
 python3 tools/test_pearl_autopilot.py  # pearl.py：假的子程式
-python3 miner/test_autotune.py         # 礦機的批次大小調整，不需要 GPU
+python3 tools/test_pearl_e2e.py        # pearl.py 端對端：真的送單器與賣出器、真的 STOP 和 Ctrl-C（約 1 分鐘）
+python3 miner/test_autotune.py         # 礦機的批次大小調整，以及缺套件時的提示；不需要 GPU
 ```
 
 ## 交給你的 AI agent

@@ -3,8 +3,8 @@
 # Copyright (C) 2026 Akari Sora
 """Offline checks for pearl.py (the one-command autopilot). No network, no baw, no wallet: the child scripts are
 tiny fakes in a temp dir (PEARL_SUBMIT_SCRIPT / PEARL_SELL_SCRIPT / PEARL_EXPORT_SCRIPT) and the token balance
-is a file. All values are made up. The last section starts pearl.py in a process of its own and sends it a real
-Ctrl-C (Windows: CTRL_C_EVENT to the console; elsewhere SIGINT).
+is a file. All values are made up. tools/test_pearl_e2e.py runs pearl.py with the real submitter and seller, a real
+STOP file and a real Ctrl-C.
 
   python3 tools/test_pearl_autopilot.py
 """
@@ -15,10 +15,8 @@ import os
 import re
 import shutil
 import signal
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 from decimal import Decimal
 
@@ -264,48 +262,6 @@ class Env:
 
 def argval(call, name):
     return call["argv"][call["argv"].index(name) + 1] if name in call["argv"] else None
-
-
-# ---- real signals: one scenario per process (this file with --one), so only that process gets the Ctrl-C
-def one(scenario, workdir, data):
-    """In a process of its own: pearl.main with the fakes; a thread creates STOP or sends a real Ctrl-C."""
-    signal.signal(signal.SIGINT, signal.default_int_handler)  # POSIX children inherit the outer run's SIG_IGN
-    pearl.token_balance = lambda: int(open(os.path.join(workdir, "balance")).read())
-    pearl.max_reward_per_proof = lambda day: 100 * COIN
-    pearl.BALANCE_WAIT = pearl.BEFORE_WAIT = 0
-
-    def act():
-        for _ in range(300):
-            if os.path.exists(os.path.join(workdir, "started")) and os.path.exists(os.path.join(data, "run.pid")):
-                break
-            time.sleep(0.05)
-        time.sleep(0.5)
-        with open(os.path.join(workdir, "alive_during.txt"), "w") as f:
-            f.write(str(pearl.run_alive(os.path.join(data, "run.pid"))))
-        if scenario == "stop":
-            open(os.path.join(data, "STOP"), "w").close()
-        elif scenario == "ctrlc":
-            try:
-                if os.name == "nt":  # what the user's Ctrl-C does: every process on this console gets it
-                    os.kill(0, signal.CTRL_C_EVENT)
-                else:  # the terminal signals pearl.py; its child is in a session of its own
-                    os.kill(os.getpid(), signal.SIGINT)
-            except OSError as e:  # no console to send it on
-                with open(os.path.join(workdir, "skip.txt"), "w") as f:
-                    f.write(repr(e))
-    if scenario in ("stop", "ctrlc"):
-        threading.Thread(target=act, daemon=True).start()
-    rc = pearl.main(["auto", "--yes", "--dir", data, "--csv", os.path.join(workdir, "none.csv")])
-    with open(os.path.join(workdir, "rc.txt"), "w") as f:
-        f.write(str(rc))
-    with open(os.path.join(workdir, "alive_after.txt"), "w") as f:
-        f.write(str(pearl.run_alive(os.path.join(data, "run.pid"))))
-    return rc
-
-
-if "--one" in sys.argv:
-    i = sys.argv.index("--one")
-    sys.exit(one(*sys.argv[i + 1:i + 4]))
 
 
 print("---- A: how much may be sold")
@@ -772,50 +728,15 @@ expect("docs: Grok Bot: advise against signing baw in on the box, with the gbot 
        "We advise against signing `baw` in on the bot's box" in doc("docs/AGENTS-SETUP.md")
        and "建議不要在 bot 的 box 上登入 `baw`" in doc("docs/AGENTS-SETUP.zh-TW.md")
        and "checked 2026-11-03" in doc("docs/AGENTS-SETUP.md"))
+SUITES = ("submit/test_submit.py", "submit/test_sell.py", "tools/test_replay_log.py", "tools/test_pearl_autopilot.py",
+          "tools/test_pearl_e2e.py", "miner/test_autotune.py")
+lists = ("AGENTS.md", "skills/pearl-miner/SKILL.md", "docs/QUICKSTART.md", "docs/QUICKSTART.zh-TW.md",
+         "docs/PLATFORMS.md", "docs/PLATFORMS.zh-TW.md", "README.md", "README.zh-TW.md", "docs/ARCHITECTURE.md")
+missing = [(r, t) for r in lists for t in SUITES if os.path.basename(t) not in doc(r)]
+expect("docs: every test list names all six offline suites", not missing and all(
+    os.path.exists(os.path.join(ROOT, t)) for t in SUITES), missing)
 expect("docs: exit 3 and 4 as the code has them", "an error after it" in agent_docs["docs/QUICKSTART.md"]
        and "--max-sell-coins" in agent_docs["docs/QUICKSTART.md"])
-
-print("---- real processes: STOP and a real Ctrl-C (D6: Windows forwards it as CTRL_BREAK_EVENT)")
-if os.name == "nt":  # a session started without Ctrl-C handling would ignore CTRL_C_EVENT: switch it on
-    import ctypes
-    ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False)
-for scenario in ("full", "stop", "ctrlc"):
-    e = Env()
-    env = dict(os.environ)
-    for k, v in e.env({"FAKE_RUN": "ok" if scenario == "full" else "wait"}).items():
-        if v is None:
-            env.pop(k, None)
-        else:
-            env[k] = v
-    old = signal.signal(signal.SIGINT, signal.SIG_IGN)  # the Windows CTRL_C_EVENT reaches this process too
-    try:
-        p = subprocess.run([sys.executable, os.path.abspath(__file__), "--one", scenario, e.d, e.data], env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=120)
-    finally:
-        signal.signal(signal.SIGINT, old)
-    rd = (lambda n: open(os.path.join(e.d, n)).read() if os.path.exists(os.path.join(e.d, n)) else None)
-    out_, err_ = p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
-    if rd("skip.txt"):
-        print(f"  [SKIP] {scenario}: no console to send Ctrl-C on ({rd('skip.txt')})")
-        continue
-    try:
-        p.stdout.decode("utf-8")
-        utf8 = True
-    except UnicodeDecodeError:
-        utf8 = False
-    runc = next((c for c in e.calls("submit") if c["argv"][0] == "run"), None)
-    expect(f"{scenario}: stdout is UTF-8 and carries 珍珠币 from the child", utf8 and "珍珠币 run started" in out_)
-    expect(f"{scenario}: run.pid names the run child; it has exited afterwards",
-           runc is not None and pearl.read_pid(os.path.join(e.data, "run.pid")) == runc["run_pid_file"]
-           and rd("alive_after.txt") == "False", (runc, rd("alive_after.txt"), err_[-300:]))
-    if scenario == "full":
-        expect("full: exit 0, sold with keep 3000 and at most 8000", rd("rc.txt") == "0"
-               and argval(e.calls("sell")[0], "--max-sell-coins") == "8000.00000000", (out_[-500:], err_))
-    else:
-        why = "STOP file" if scenario == "stop" else "signal (Ctrl-C / SIGTERM)"
-        expect(f"{scenario}: run.pid was alive while the run waited", rd("alive_during.txt") == "True")
-        expect(f"{scenario}: the child stopped for '{why}' with a SUMMARY; no sale, exit 4",
-               f"stop={why}" in out_ and rd("rc.txt") == "4" and not e.calls("sell"), (rd("rc.txt"), err_[-300:]))
 
 for d in Env.dirs:
     shutil.rmtree(d, ignore_errors=True)

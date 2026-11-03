@@ -161,7 +161,7 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 
 ## Offline tests (optional)
 
-To check the code itself, run the five offline suites in the clone (no network, no wallet, no GPU); each must end
+To check the code itself, run the six offline suites in the clone (no network, no wallet, no GPU); each must end
 with `FAILED: none`:
 
 ```sh
@@ -169,7 +169,8 @@ python3 submit/test_submit.py          # the submitter against a fake chain and 
 python3 submit/test_sell.py            # the seller against a pool model
 python3 tools/test_replay_log.py       # log redaction
 python3 tools/test_pearl_autopilot.py  # pearl.py with fake child scripts
-python3 miner/test_autotune.py         # the miner's launch sizing, no GPU needed
+python3 tools/test_pearl_e2e.py        # pearl.py with the real submitter and seller, real STOP and Ctrl-C (~1 min)
+python3 miner/test_autotune.py         # the miner's launch sizing and its missing-package message; no GPU needed
 ```
 
 ## Risks (tell the user before the first run)

@@ -453,7 +453,7 @@ Yes. The fake `baw` refuses any RPC other than `127.0.0.1`, the submitter's RPC 
 - **Stops instead of guessing**: any preview risk warning, any unexplained simulation failure, the gas budget, the `STOP` file or the deadline ends the run cleanly.
 - **Splits batches near the cap** instead of letting a whole 16-proof transaction revert.
 - **No private key anywhere**: the Binance Agentic Wallet is MPC; the tools only drive its CLI.
-- **Proven before mainnet**: five offline test suites (**87** checks for the submitter, **85** for the seller, **38** for the log redaction, **124** for the one-command `pearl.py`, **11** for the miner's launch sizing), run on macOS, Linux and Windows ([PLATFORMS.md](docs/PLATFORMS.md)), and a full fork simulation against the real contract with a live opening and a competitor eating the cap.
+- **Proven before mainnet**: six offline test suites (**87** checks for the submitter, **85** for the seller, **38** for the log redaction, **129** for the one-command `pearl.py`, **15** for the miner's launch sizing, **31** for `pearl.py` end to end with real signals), run on macOS, Linux and Windows ([PLATFORMS.md](docs/PLATFORMS.md)), and a full fork simulation against the real contract with a live opening and a competitor eating the cap.
 - **Standard library only** for the submitter and the seller: copy `pearl_submit.py` (and `pearl_sell.py`, which imports its address checks) to the machine with the wallet session.
 
 ### Pipeline diagram
@@ -484,7 +484,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · contract facts: [docs/C
 
 ![Fork simulation on anvil](demo/simulation.gif)
 
-**Offline test suites**: the submitter against a fake chain and a fake `baw` (87 checks); the seller against a pool model calibrated on the real pool (85 checks); the log redaction rules (38 checks); `pearl.py` with fake child scripts (124 checks); the miner's launch sizing (11 checks). The list and how to run them: [docs/QUICKSTART.md](docs/QUICKSTART.md#check-the-code-yourself-optional). ([MP4](demo/tests.mp4))
+**Offline test suites**: the submitter against a fake chain and a fake `baw` (87 checks); the seller against a pool model calibrated on the real pool (85 checks); the log redaction rules (38 checks); `pearl.py` with fake child scripts (129 checks); the miner's launch sizing (15 checks); and `pearl.py` with the real submitter and seller on a fake chain and market, stopped by STOP and real Ctrl-C (31 checks). The list and how to run them: [docs/QUICKSTART.md](docs/QUICKSTART.md#check-the-code-yourself-optional). ([MP4](demo/tests.mp4))
 
 ![Both offline test suites passing](demo/tests.gif)
 
@@ -496,7 +496,7 @@ Render them yourself with [vhs](https://github.com/charmbracelet/vhs): `vhs demo
 pearl.py               one command for a mining day: check, plan, yes, submit, sell
 AGENTS.md              rules for AI agents (CLAUDE.md and GEMINI.md import it)
 skills/pearl-miner/    the pearl-miner skill (SKILL.md, one self-contained file)
-miner/                 OpenCL miner (miner.py, keccak_miner.cl, requirements.txt, test_autotune.py: 11 checks)
+miner/                 OpenCL miner (miner.py, keccak_miner.cl, requirements.txt, test_autotune.py: 15 checks)
 submit/
   pearl_submit.py      the submitter: check / rehearse / run
   export_proofs.py     proofs.csv -> verified proofs.json
@@ -506,7 +506,8 @@ submit/
   fork_rehearsal/      anvil fork simulation + fake baw (127.0.0.1 only)
 tools/replay_log.py    replay a run log with its timing, anonymized
 tools/test_replay_log.py  offline tests for the redaction (38 checks)
-tools/test_pearl_autopilot.py  offline tests for pearl.py (124 checks)
+tools/test_pearl_autopilot.py  offline tests for pearl.py (129 checks)
+tools/test_pearl_e2e.py  pearl.py end to end: real submitter and seller, real signals (31 checks)
 demo/                  vhs tapes, GIF / MP4 renders, the anonymized day-1 log
 docs/                  QUICKSTART, AGENTS-SETUP, PLATFORMS, CONTRACT.md, ARCHITECTURE.md
 ```
