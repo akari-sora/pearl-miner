@@ -393,5 +393,19 @@ expect("an unreadable run.pid refuses the start", rc == 1 and "already going" in
 
 for d in Env.dirs:
     shutil.rmtree(d, ignore_errors=True)
+# ---- v0.1.2: the sale counts at most mined x 100 coins as new, and only follows a clean stop
+expect("keep: coins beyond mined x 100 (from elsewhere / stale before) are never sold",
+       pearl.keep_raw(1000 * COIN, 11000 * COIN, 0.8, mined=16) == 11000 * COIN - int(16 * 100 * COIN * 0.8))
+expect("keep: the cap does not bind when the growth fits", pearl.keep_raw(1000 * COIN, 2000 * COIN, 0.8, mined=16)
+       == 1200 * COIN)
+for reason in ("day 2 budget full (remaining 0.71 < reward 91.30)", "tx reverted and the day budget is full",
+               "deadline", "gas budget 0.045000 BNB reached at launch", "BNB 0.004 minus in-flight fees would drop",
+               "chain moved past day 2"):
+    expect(f"clean stop sells: {reason[:30]}", bool(pearl.CLEAN_STOP.match(reason)))
+for reason in ("crash in tracker: KeyError('x')", "3 execute failures in a row", "signal (Ctrl-C / SIGTERM)",
+               "execute needs Binance App approval (order 1)", "STOP file", "unexpected simulation failure: X",
+               "execute refused before launch: UNSAFE_ARG"):
+    expect(f"abnormal stop does not sell: {reason[:30]}", not pearl.CLEAN_STOP.match(reason))
+
 print("FAILED:", FAILED or "none")
 sys.exit(1 if FAILED else 0)

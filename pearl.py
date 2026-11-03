@@ -38,6 +38,11 @@ EXIT_OK, EXIT_REFUSED, EXIT_RUN, EXIT_SALE = 0, 1, 3, 4
 SCRIPTS = {"submit": ("PEARL_SUBMIT_SCRIPT", "pearl_submit.py"),
            "sell": ("PEARL_SELL_SCRIPT", "pearl_sell.py"),
            "export": ("PEARL_EXPORT_SCRIPT", "export_proofs.py")}
+# stop reasons after which the run finished normally; any other stop (crash, risk refusal, App approval, failed
+# executes, signal, ...) means nothing is sold automatically
+CLEAN_STOP = re.compile(r"^(day \d+ budget full|tx reverted and the day budget is full|deadline|gas budget |no budget left|"
+                        r"BNB |chain moved past day|no proofs left|no usable proofs)")
+MAX_REWARD_RAW = 100 * 10 ** 8  # no proof ever pays 100 coins (the first claim paid ~100, it only falls), raw units
 SUMMARY_RE = re.compile(r"SUMMARY txs=(\d+) proofs_mined=(\d+) reverted=(\d+) fees=([0-9.]+) BNB stop=(.*)$")
 SOLD_RE = re.compile(r"end balance ([0-9,.]+) \S+ \(sold (-?[0-9,.]+)\); BNB from finished orders ≈ (\S+)")
 CHECK_OK_RE = re.compile(r"\bCHECK OK\s*$")
@@ -201,10 +206,13 @@ def stream_child(cmd, log_path, pid_path=None):
 
 
 # ---------------------------------------------------------------- pieces of the plan
-def keep_raw(before, after, fraction):
+def keep_raw(before, after, fraction, mined=None):
     """Raw units to keep: before + (1 - fraction) * (after - before), rounded so that at most `fraction` of the
-    new coins is sold (never more)."""
+    new coins is sold (never more). With `mined`, the new coins counted are at most mined x 100 coins, so coins that
+    arrived from elsewhere (or a stale `before` read) are never sold."""
     new = after - before
+    if mined is not None:
+        new = min(new, mined * MAX_REWARD_RAW)
     return after - int(Decimal(new) * Decimal(str(fraction)))  # int() truncates: sells at most the fraction
 
 
@@ -389,6 +397,8 @@ def cmd_auto(a):
             sale_block = "you pressed Ctrl-C"
         elif os.path.exists(P.stop):
             sale_block = f"{short(P.stop)} exists"
+        elif not CLEAN_STOP.match(m.group(5).strip()):
+            sale_block = f"the run did not finish normally (stop: {m.group(5).strip()[:160]})"
         elif sale_block is None and mined == 0:
             sold_line = "nothing to sell: this run mined no proofs"
         elif sale_block is None:
@@ -411,7 +421,7 @@ def cmd_auto(a):
             elif after <= before:
                 sold_line = f"nothing to sell: the balance did not grow ({coins(before)} -> {coins(after)})"
             else:
-                k = keep_raw(before, after, a.sell_fraction)
+                k = keep_raw(before, after, a.sell_fraction, mined)
                 out(f"\n==== sell ({a.sell}): balance {coins(before)} -> {coins(after)}, +{coins(after - before)} "
                     f"this run; keeping {coins(k)}, selling up to {coins(after - k)}. Output also in "
                     f"{short(P.sell_log)} ====")

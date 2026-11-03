@@ -188,7 +188,7 @@ Help me mine 珍珠币 (PearlMiningV2) with pearl-miner: https://gitlab.com/aa22
 5. Run `python3 pearl.py auto --plan`: it runs the read-only check and prints the plan. Stop if check fails.
    Show me the plan: day and time, gas budget, keep reserve, sell mode and sell fraction. Wait until I answer yes.
 6. After my yes, start it a few minutes before the opening so it survives your shell's time limit, for example
-   `echo yes | python3 pearl.py auto > submit/auto.log 2>&1` in the background, with the same options as the plan.
+   `echo yes | python3 pearl.py auto --day N > submit/auto.log 2>&1` in the background (N is the day the plan showed), with the same options as the plan; if that day's opening has passed, do not run it: show the user a new plan.
    Never use --yes unless I wrote the strategy myself and told you to use it.
 7. Do not change the code, the defaults or the safety limits unless I ask.
 8. When it ends, report the summary: proofs mined, gas spent, coins sold, BNB received, the stop reason, and the

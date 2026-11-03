@@ -108,7 +108,8 @@ Start it a few minutes before 11:08:54 UTC, with the same options the user appro
 time limit cannot cut it off:
 
 ```sh
-echo yes | nohup python3 pearl.py auto [the approved options] > submit/auto.log 2>&1 &
+echo yes | nohup python3 pearl.py auto --day N [the approved options] > submit/auto.log 2>&1 &
+# N = the day the approved plan showed. If that opening has already passed, do not run: show the user a new plan.
 python3 pearl.py status            # any time: is it running, and the end of the logs
 ```
 

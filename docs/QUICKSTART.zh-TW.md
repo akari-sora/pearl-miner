@@ -176,7 +176,7 @@ agent 完全不需要私鑰。要安裝 pearl-miner skill 或設定特定的 age
 5. 跑 `python3 pearl.py auto --plan`：它會跑唯讀的 check 並印出計畫，check 失敗就停下來。把計畫給我看：哪一天、幾點、
    gas 上限、保留的 BNB、賣出模式和比例。等我回答 yes。
 6. 我說 yes 之後，在開放前幾分鐘啟動，並讓它不受你的 shell 時間限制，例如在背景執行
-   `echo yes | python3 pearl.py auto > submit/auto.log 2>&1`，參數要和計畫一樣。
+   `echo yes | python3 pearl.py auto --day N > submit/auto.log 2>&1`（N 是計畫顯示的那一天），參數要和計畫一樣；那一天的開放時間已過就不要執行，重新給使用者看計畫。
    除非策略是我自己寫的而且我叫你用，否則絕對不要用 --yes。
 7. 除非我要求，不要改程式碼、預設值或安全上限。
 8. 結束後回報總結：挖到的 proof、花掉的 gas、賣出的幣、換到的 BNB、停止原因和結束代碼。可以用
