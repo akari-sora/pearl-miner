@@ -931,7 +931,12 @@ def main():
                 setattr(ps, k, v)
         ps.MIN_REWARD_PER_PROOF = keep
         print(f"[check: {name}] " + " | ".join(x for x in out if "proof" in x or "WARNING" in x or "CHECK" in x)[:400])
-        return out, sims, os.path.exists(jf)
+        made = os.path.exists(jf)
+        for f in (pf, jf):  # leave no temp dir behind
+            if os.path.exists(f):
+                os.remove(f)
+        os.rmdir(tmp)
+        return out, sims, made
 
     out, sims, _ = check_case("journal covers the used front", 200, (), journal_nonces=range(1, 33))
     expect("check: proofs sent before (journal, front of the file) are skipped: CHECK OK",
