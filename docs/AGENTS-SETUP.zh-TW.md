@@ -50,8 +50,8 @@ cp skills/pearl-miner/SKILL.md ~/.agents/skills/pearl-miner/
 
 - 只有 `SKILL.md` 會被上傳，所以所有步驟都寫在這個檔案裡。
 - Grok bot 在它自己的雲端電腦（它的「box」）上運作。pearl-miner 必須在**你自己的電腦**上執行，也就是 `baw`
-  登入的那台。bot 透過 Grok Bot Shell 連到你註冊過的電腦，這可能需要你核准。不要在 bot 的 box 上登入 `baw`：
-  同一個帳號的 bot 共用那台機器。
+  登入的那台。bot 透過 Grok Bot Shell 連到你註冊過的電腦，這可能需要你核准。bot 的 box 由同一帳號底下的所有 bot
+  共用；要不要在上面登入 `baw`，請先想清楚這一點。
 
 ### Cursor、Gemini CLI、OpenCode
 

@@ -51,7 +51,8 @@ every bot on the account sees it), or by sending the file to a bot and asking it
 - Only `SKILL.md` is uploaded. That is why it holds every step itself.
 - A Grok bot works on its own cloud computer (its "box"). pearl-miner has to run on **your** computer, where `baw`
   is signed in. The bot reaches it through Grok Bot Shell on a machine you registered, and that can ask for your
-  approval. Do not sign `baw` in on the bot's box: the bots of that account share it.
+  approval. The bot's box is shared by all the bots of the same account; think about that before you decide
+  whether to sign `baw` in there.
 
 ### Cursor, Gemini CLI, OpenCode
 
