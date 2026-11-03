@@ -29,9 +29,24 @@ import re
 import sys
 import time
 
-import numpy as np
-import pyopencl as cl
-from Crypto.Hash import keccak
+PIP_NAME = {"numpy": "numpy", "pyopencl": "pyopencl", "Crypto": "pycryptodome"}
+try:
+    import numpy as np
+    import pyopencl as cl
+    from Crypto.Hash import keccak
+except ImportError as e:  # a fresh clone without the packages: say what to install instead of a traceback
+    _req = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    try:
+        _req = os.path.relpath(_req)
+    except ValueError:  # another drive on Windows
+        pass
+    _py = f'"{sys.executable}"' if " " in sys.executable else sys.executable
+    _top = (e.name or "").split(".")[0]
+    if isinstance(e, ModuleNotFoundError) and _top in PIP_NAME:
+        sys.exit(f"miner.py: the Python package {PIP_NAME[e.name]} is not installed; install the miner's packages "
+                 f"with: {_py} -m pip install -r {_req}")
+    sys.exit(f"miner.py: {PIP_NAME.get(_top, _top or 'a package')} could not be loaded ({e}); reinstall with: "
+             f"{_py} -m pip install -r {_req} (pyopencl also needs a GPU OpenCL driver, see docs/PLATFORMS.md)")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from autotune import next_launch  # noqa: E402  (same folder)

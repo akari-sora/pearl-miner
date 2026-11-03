@@ -6,6 +6,7 @@
   python3 miner/test_autotune.py
 """
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -61,6 +62,39 @@ expect("2 MH/s: global size halves until a launch fits, stays a multiple of the 
 g, i = next_launch(GSZ, 64, 3.0, TARGET, UNIT)
 expect("a 3 s launch at iters 64: next launch about 250 ms", (g, i) == (GSZ, 5), (g, i))
 expect("never above MAX_ITERS", next_launch(GSZ, MAX_ITERS, 0.001, TARGET, UNIT)[1] == MAX_ITERS)
+
+# miner.py on a fresh clone without its packages: one line saying what to install, no traceback. Each case runs
+# miner.py in a Python of its own where one package is missing or fails to load (an import hook says so whether
+# or not it is installed here); the packages imported before it are stand-ins.
+MINER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miner.py")
+CASE = r"""
+import runpy, sys, types
+fake, block, broken = sys.argv[1].split(","), sys.argv[2], sys.argv[3] == "broken"
+for m in filter(None, fake):
+    sys.modules[m] = types.ModuleType(m)
+class Hook:
+    def find_spec(self, name, path=None, target=None):
+        if name == block and broken:
+            raise ImportError("libOpenCL.so.1: cannot open shared object file", name=block + "._cl")
+        if name == block:
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+for m in list(sys.modules):
+    if m.split(".")[0] == block:
+        del sys.modules[m]
+sys.meta_path.insert(0, Hook())
+sys.argv = [sys.argv[4], "--help"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+for fake, block, kind, want in ((",", "numpy", "missing", "numpy is not installed"),
+                                ("numpy", "pyopencl", "missing", "pyopencl is not installed"),
+                                ("numpy,pyopencl", "Crypto", "missing", "pycryptodome is not installed"),
+                                ("numpy", "pyopencl", "broken", "pyopencl could not be loaded")):
+    p = subprocess.run([sys.executable, "-I", "-c", CASE, fake, block, kind, MINER], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    err = p.stderr.decode("utf-8", "replace").strip()
+    expect(f"miner.py without {block} ({kind}): exit 1, one line naming the package and the pip command, no traceback",
+           p.returncode == 1 and want in err and "-m pip install -r " in err and "requirements.txt" in err
+           and "\n" not in err and "Traceback" not in err, (p.returncode, err[-300:]))
 
 print("FAILED:", FAILED or "none")
 sys.exit(1 if FAILED else 0)
