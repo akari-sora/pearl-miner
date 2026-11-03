@@ -6,6 +6,7 @@
 """
 import collections
 import re
+import shutil
 import signal
 import json
 import os
@@ -388,6 +389,17 @@ def platform_checks(expect):
 
 
 def main():
+    """Every temp dir of this run goes under one dir of its own, removed at the end, also after a failure."""
+    own, saved = tempfile.mkdtemp(prefix="pearl-test-submit-"), tempfile.tempdir
+    tempfile.tempdir = own
+    try:
+        return _main()
+    finally:
+        tempfile.tempdir = saved
+        shutil.rmtree(own, ignore_errors=True)
+
+
+def _main():
     fails = []
 
     checks = [0]

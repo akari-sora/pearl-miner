@@ -2,8 +2,11 @@
 # Copyright (C) 2026 Akari Sora
 """Offline simulation of pearl_sell.py: fake baw + a constant-liquidity pool model calibrated on the
 PancakeSwap Infinity pool (evening of 2026-11-03: L = 7.06e17, 431,426 coins per BNB, fee 0.3726%)."""
-import json, math, os, signal, subprocess, sys, tempfile, time
+import atexit, json, math, os, shutil, signal, subprocess, sys, tempfile, time
 from decimal import Decimal
+OWN_TMP = tempfile.mkdtemp(prefix="pearl-test-sell-")  # every temp dir of this run goes here; removed at exit,
+tempfile.tempdir = OWN_TMP                              # also after a failure
+atexit.register(shutil.rmtree, OWN_TMP, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 os.environ["PEARL_WALLET"] = "0x00000000000000000000000000000000DeaDBeef"  # dummy: balances and quotes are faked
