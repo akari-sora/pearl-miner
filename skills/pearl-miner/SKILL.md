@@ -13,7 +13,7 @@ what was mined.
 This file works on its own: everything needed to start is below. After cloning, the repository's `AGENTS.md` and
 `docs/QUICKSTART.md` have the details. The safety rules here always apply.
 
-PINNED: tag=TBD commit=TBD
+PINNED: tag=v0.1.2 commit=75bbedae1b12113cd3cca5ae2b3b0885cee5418c
 
 ## Prerequisites
 
