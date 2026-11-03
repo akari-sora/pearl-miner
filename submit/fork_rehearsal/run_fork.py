@@ -22,8 +22,9 @@ every hex value of 4+ digits (tx hashes, your address) masked, block numbers and
 rounded and the temp work dir hidden; the rules of tools/replay_log.py --anonymize. The day before the target is set
 full on the fork before the opening, so nothing can be mined early.
 
---autopilot runs the one-command path instead, as you would on the day: `pearl.py auto --yes --sell off` with
-check and run as child processes (fork_submit.py points them at the fork). --journal copies an earlier
+--autopilot runs the one-command path instead, as you would on the day: `pearl.py auto --day N --sell off`, its
+question answered with yes as an agent pipes it (not --yes, so a check WARNING is shown in the plan and does not
+refuse), with check and run as child processes (fork_submit.py points them at the fork). --journal copies an earlier
 journal.jsonl into the work dir, so proofs sent on earlier days are skipped as in a real later-day run.
 """
 import argparse
@@ -128,7 +129,8 @@ def main():
     ap.add_argument("--day", type=int, default=None, help="day to open on the fork (default: the next one)")
     ap.add_argument("--port", default=PORT, help="local anvil port, must be free (env PEARL_FORK_PORT; default 8547)")
     ap.add_argument("--autopilot", action="store_true",
-                    help="run `pearl.py auto --yes --sell off` (check + run as child processes) instead of the submitter")
+                    help="run `pearl.py auto --day N --sell off`, answering its question with yes (check + run as child "
+                         "processes) instead of the submitter")
     ap.add_argument("--budget-bnb", default=None,
                     help="gas budget passed on (default: the submitter's 0.045 BNB, earlier runs in the journal included)")
     ap.add_argument("--journal", default=None, help="an earlier journal.jsonl to copy in, so proofs sent before are "
@@ -279,7 +281,12 @@ def main():
                 os.environ["PEARL_FORK_T0"] = repr(b_wall)
             sys.path.insert(0, os.path.dirname(SUBMIT))
             import pearl
-            rc = pearl.main(["auto", "--yes", "--sell", "off", "--day", str(target), "--minutes", str(a.minutes),
+
+            def answer_yes(prompt):  # what `echo yes | pearl.py auto --day N` gives it; stdin may be your terminal
+                print(prompt + "yes   (answered by run_fork.py)", flush=True)
+                return "yes"
+            pearl.read_answer = answer_yes
+            rc = pearl.main(["auto", "--sell", "off", "--day", str(target), "--minutes", str(a.minutes),
                              "--dir", work] + (["--budget-bnb", str(a.budget_bnb)] if a.budget_bnb else []))
         else:
             sys.argv = ["pearl_submit.py", "run", "--day", str(target), "--proofs", proofs, "--journal", journal,
@@ -328,7 +335,8 @@ def main():
             checks.update(autopilot_checks(work, rc))
         for k, v in checks.items():
             print(f"  [{'PASS' if v else 'FAIL'}] {k}")
-        print("FORK REHEARSAL:", "PASS" if all(checks.values()) else "FAIL")
+        passed = all(checks.values())
+        print("FORK REHEARSAL:", "PASS" if passed else "FAIL")
     finally:
         anvil.terminate()
         try:
@@ -338,7 +346,8 @@ def main():
         print(f"anvil stopped (pid {anvil.pid}); work dir {work}")
         for st in streams:
             st.close_line()
+    return passed
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(0 if main() else 1)

@@ -711,6 +711,11 @@ try:
 except Exception as ex:  # noqa: BLE001
     expect("F6: no run.log and no run.pid: three FAILs in the table, no FileNotFoundError", False, repr(ex))
 
+rf_src = open(os.path.join(ROOT, "submit", "fork_rehearsal", "run_fork.py"), encoding="utf-8").read()
+expect("E3: the fork rehearsal answers yes with --day like an agent, never --yes (a check WARNING does not refuse it)",
+       '"--yes"' not in rf_src and "pearl.read_answer = answer_yes" in rf_src and '"--day", str(target)' in rf_src)
+expect("F6: run_fork exits 1 when the rehearsal fails", "sys.exit(0 if main() else 1)" in rf_src)
+
 print("---- status")
 e = Env()
 e.run(["--yes", "--sell", "off"])
