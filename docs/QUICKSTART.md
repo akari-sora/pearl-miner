@@ -150,7 +150,8 @@ The summary shows the proofs mined, the gas spent, the coins sold and the BNB re
 ## Hand it to your AI agent
 
 You can give this job to a coding agent such as Claude Code, Codex or Cursor. Copy the prompt below into your
-agent, in your own words if you like. The agent never needs a private key.
+agent, in your own words if you like. The agent never needs a private key. To install the pearl-miner skill or
+set up a particular agent, see [AGENTS-SETUP.md](AGENTS-SETUP.md).
 
 ```text
 Help me mine 珍珠币 (PearlMiningV2) with pearl-miner: https://gitlab.com/aa22396584/pearl-miner

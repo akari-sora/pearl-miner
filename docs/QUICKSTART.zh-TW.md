@@ -141,7 +141,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 ## 交給你的 AI agent
 
 你可以把這件事交給 Claude Code、Codex 或 Cursor 這類程式 agent。把下面的提示詞貼給你的 agent（也可以改成你自己的話）。
-agent 完全不需要私鑰。
+agent 完全不需要私鑰。要安裝 pearl-miner skill 或設定特定的 agent，請看 [AGENTS-SETUP.zh-TW.md](AGENTS-SETUP.zh-TW.md)。
 
 ```text
 請用 pearl-miner 幫我挖 珍珠币（PearlMiningV2）：https://gitlab.com/aa22396584/pearl-miner
