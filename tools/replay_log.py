@@ -32,6 +32,7 @@ who looks. Do not publish a log if your wallet must stay unlinkable.
 """
 import argparse
 import math
+import os
 import re
 import sys
 import time
@@ -139,7 +140,42 @@ def paint(line, color):
     return line
 
 
+def safe_stdio():
+    """Printing never crashes: redirected output on Windows uses the ANSI code page (cp1252, cp950, ...) and becomes
+    UTF-8 here; elsewhere a non-UTF-8 stream prints '?' for what it cannot show. Same rule as pearl_submit.py."""
+    for s in (sys.stdout, sys.stderr):
+        enc = str(getattr(s, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if enc == "utf8" or not hasattr(s, "reconfigure"):
+            continue
+        try:
+            s.reconfigure(**({"encoding": "utf-8"} if os.name == "nt" else {}), errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+def windows_ansi():
+    """Windows consoles show ANSI colours only with virtual-terminal processing on (Windows 10 and later)."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetStdHandle.argtypes = (wintypes.DWORD,)
+        k32.GetStdHandle.restype = wintypes.HANDLE
+        k32.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        k32.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        h = k32.GetStdHandle(wintypes.DWORD(-11 & 0xFFFFFFFF))  # STD_OUTPUT_HANDLE
+        mode = wintypes.DWORD()
+        if not h or not k32.GetConsoleMode(h, ctypes.byref(mode)):
+            return False
+        return bool(k32.SetConsoleMode(h, mode.value | 0x0004))  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except (OSError, AttributeError, ValueError):
+        return False
+
+
 def main():
+    safe_stdio()
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("log")
     ap.add_argument("--speed", type=float, default=1.0, help="replay speed (2.0 = twice as fast)")
@@ -156,6 +192,8 @@ def main():
     if a.speed <= 0 or a.max_gap < 0:
         raise SystemExit("--speed must be > 0 and --max-gap >= 0")
     color = a.color == "always" or (a.color == "auto" and sys.stdout.isatty())
+    if color and not windows_ansi() and a.color == "auto":  # an old Windows console would print raw escapes
+        color = False
     with open(a.log, encoding="utf-8", errors="replace") as f:
         lines = [ln.rstrip("\n") for ln in f]
     zero = None

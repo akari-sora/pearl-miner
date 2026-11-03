@@ -4,7 +4,8 @@
 
 Nothing touches the real chain or the real wallet:
 - anvil forks BSC into memory (--no-storage-caching) and impersonates your wallet (no key exists or is needed);
-- a fake `baw` (fork_rehearsal/bin/baw) turns preview/execute into eth_call/eth_sendTransaction on the fork;
+- a fake `baw` (fork_rehearsal/bin/baw; baw.cmd on Windows) turns preview/execute into eth_call/eth_sendTransaction
+  on the fork;
 - pearl_submit.RPCS is pointed at the fork only; journal and proofs are copies in a temp dir.
 The fork's clock is moved to 30 s before the next day's boundary and the submitter's boundary is moved to
 "now + 30 s", so the opening happens live. A competitor thread then eats the day cap through storage writes so
@@ -98,6 +99,7 @@ class RedactedStream(io.TextIOBase):
 
 
 def main():
+    ps.safe_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument("--cap-proofs", type=int, default=400, help="day-2 room left at the opening, in proofs")
     ap.add_argument("--competitor-rate", type=float, default=4.0, help="proofs per second eaten by others")
@@ -136,10 +138,11 @@ def main():
             return red(re.sub(r"\bunix \d{10}(?:\.\d+)?", "unix …", line))  # on the fork that is the clock now
         streams = [RedactedStream(sys.stdout, scrub), RedactedStream(sys.stderr, scrub)]
         sys.stdout, sys.stderr = streams
-    log = open(os.path.join(work, "anvil.log"), "w")
+    log = open(os.path.join(work, "anvil.log"), "w", encoding="utf-8")
     anvil = subprocess.Popen(["anvil", "--fork-url", a.fork_url, "--port", str(a.port), "--no-storage-caching",
                               "--block-time", "1", "--auto-impersonate", "--chain-id", "56"], stdout=log, stderr=log)
-    open(os.path.join(work, "anvil.pid"), "w").write(str(anvil.pid))
+    with open(os.path.join(work, "anvil.pid"), "w", encoding="utf-8") as f:
+        f.write(str(anvil.pid))
     try:
         for _ in range(60):
             if anvil.poll() is not None:  # bad --fork-url, port taken meanwhile, ...: stop at once
@@ -184,10 +187,14 @@ def main():
         proofs = os.path.join(work, "proofs.json")
         shutil.copy(a.proofs, proofs)
         journal = os.path.join(work, "journal.jsonl")
-        os.environ["PATH"] = os.path.join(HERE, "bin") + os.pathsep + os.environ["PATH"]
+        bin_dir = os.path.join(HERE, "bin")
+        os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
         os.environ["FAKEBAW_STATE"] = os.path.join(work, "fakebaw.json")
         os.environ["FAKEBAW_RPC"] = FORK_RPC
-        assert shutil.which("baw") == os.path.join(HERE, "bin", "baw"), "fake baw is not first on PATH"
+        os.environ["FAKEBAW_PYTHON"] = sys.executable  # bin/baw.cmd (Windows) runs bin/baw with this interpreter
+        fake = os.path.join(bin_dir, "baw.cmd" if ps.WINDOWS else "baw")
+        if os.path.normcase(ps.find_baw() or "") != os.path.normcase(fake):
+            raise SystemExit(f"fake baw is not first on PATH (found {ps.find_baw()!r})")
 
         reward = int(frpc("eth_call", [{"to": ps.CONTRACT, "data": "0x" + ps.SEL_CURRENT_REWARD}, "latest"]), 16)
         stop_comp = threading.Event()

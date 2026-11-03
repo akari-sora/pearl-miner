@@ -20,7 +20,8 @@ Rules this script enforces:
 - refuses to sell unless --wallet is the wallet baw is signed in to (`baw wallet address`, BSC entry):
   balances are read for --wallet, but swaps go out from the signed-in wallet;
 - refuses to start while the mining run is alive, or when submit/run.pid is missing (start the mining run with
-  `& echo $! > submit/run.pid`, see the README): one tx per address at a time;
+  `& echo $! > submit/run.pid`, or on Windows with Start-Process -PassThru, see docs/PLATFORMS.md): one tx per
+  address at a time;
 - every chunk: a small reference quote and a chunk quote; impact = 1 - chunk rate / reference rate;
   above --max-impact the chunk is halved down to --min-chunk, then the script waits and re-quotes;
 - after a swap it polls `market-order list --orderId` to FINISHED / FAILED; an order still PENDING or with an
@@ -42,6 +43,7 @@ import time
 import urllib.request
 from decimal import Decimal, InvalidOperation
 
+import pearl_submit as _submit  # same folder: baw lookup and process helpers, safe console output
 from pearl_submit import wallet_problem  # same folder: 0x + 40 hex, EIP-55 checksum
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -73,23 +75,26 @@ class Journal:
 
     def write(self, **rec):
         rec["t"] = round(now(), 3)
-        with open(self.path, "a") as f:
+        with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def baw(args, timeout=60):
     """Run `baw ... --json`; returns a dict ({"success": False, ...} on any failure)."""
     try:
-        p = subprocess.run(["baw", *args, "--json"], capture_output=True, text=True, timeout=timeout)
+        out, err = _submit.finish_baw(_submit.start_baw(args), timeout)
+        out, err = out or "", err or ""
     except subprocess.TimeoutExpired:
         return {"success": False, "error": {"code": "TIMEOUT", "message": f"baw {' '.join(args[:2])} timed out"}}
+    except _submit.UnsafeArg as e:
+        return {"success": False, "error": {"code": "UNSAFE_ARG", "message": str(e)}}
     except OSError as e:
         return {"success": False, "error": {"code": "NO_BAW", "message": str(e)}}
     try:
-        j = json.loads(p.stdout)
-        return j if isinstance(j, dict) else {"success": False, "error": {"code": "NO_JSON", "message": p.stdout[:300]}}
+        j = json.loads(out)
+        return j if isinstance(j, dict) else {"success": False, "error": {"code": "NO_JSON", "message": out[:300]}}
     except ValueError:
-        return {"success": False, "error": {"code": "NO_JSON", "message": (p.stdout or p.stderr)[:300]}}
+        return {"success": False, "error": {"code": "NO_JSON", "message": (out or err)[:300]}}
 
 
 def baw_wallet_address():
@@ -164,12 +169,46 @@ def pending_orders():
     return [x for x in items if isinstance(x, dict) and x.get("status") == "PENDING"]
 
 
+def _windows_pid_alive(pid):
+    """Windows: is process `pid` still running? Never os.kill there: signal 0 is CTRL_C_EVENT and other values
+    terminate the process. Unknown counts as alive."""
+    import ctypes
+    from ctypes import wintypes
+    if not 0 < pid <= 0xFFFFFFFF:
+        return True
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        k32.GetExitCodeProcess.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        k32.CloseHandle.restype = wintypes.BOOL
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such process; access denied: alive
+        try:
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(h)
+    except (OSError, AttributeError, ValueError, TypeError, ctypes.ArgumentError):
+        return True
+
+
 def mining_run_alive(pid_path):
     """True while the mining run may still be sending; a missing or unreadable pid file counts as alive."""
     try:
-        pid = int(open(pid_path).read().strip())
+        with open(pid_path, "rb") as f:
+            raw = f.read(64)
+        # Windows PowerShell 5 writes UTF-16 with `>` / Out-File and may add a byte-order mark
+        pid = int(raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig").strip())
     except (OSError, ValueError):
         return True
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -177,7 +216,8 @@ def mining_run_alive(pid_path):
     except PermissionError:
         return True
     try:  # Linux: a zombie (state Z) has finished
-        return open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0] != "Z"
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
     except (OSError, IndexError):
         return True
 
@@ -265,7 +305,7 @@ def cmd_run(a):
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor = None, None, 0
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
-        for line in open(a.journal):
+        for line in open(a.journal, encoding="utf-8", errors="replace"):
             try:
                 rec = json.loads(line)
             except ValueError:
@@ -461,6 +501,8 @@ def cmd_run(a):
 
 
 def main():
+    _submit.safe_stdio()
+    _submit.BAW = _submit.find_baw()  # None: plain "baw", which fails as NO_BAW and refuses
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("plan", "run"):

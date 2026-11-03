@@ -17,7 +17,11 @@ miner/miner.py ──proofs.csv──▶ submit/export_proofs.py ──proofs.js
 first 30 bits of the digest are zero (it tests the low 32 bits of lane 0 against a mask, which is the same thing).
 Every GPU hit is re-hashed on the CPU before it is appended (and fsynced) to `proofs.csv`; a mismatch aborts.
 
-- `--test` runs the kernel with an easy mask and checks 2,000 hits on the CPU.
+- `--test` runs the kernel with an easy mask, checks 2,000 hits on the CPU and compares the number of hits the GPU
+  counted with the number expected.
+- `--list-devices` / `--device N` choose among all OpenCL devices (default: the first NVIDIA GPU, else the first GPU).
+  Each launch is sized to about `--launch-ms` (250 ms), so a GPU that drives a display stays clear of the Windows
+  and macOS watchdogs. See [PLATFORMS.md](PLATFORMS.md) for the vendors and systems tested.
 - `--bench 20` reports the hash rate. An RTX 4070 SUPER does about 2,040 MH/s, which is roughly 1.9 proofs per
   second or 6,800 per hour at stage 0.
 - Create the file `STOP` next to the output to stop it cleanly.
@@ -139,8 +143,9 @@ minus everything in flight stays above `--keep-bnb`.
 
 ### The journal
 
-`journal.jsonl` is append-only; every record is written with `flush` + `fsync`. The run takes an exclusive `flock`
-on it, so a second sender on the same journal refuses to start.
+`journal.jsonl` is append-only; every record is written with `flush` + `fsync`. The run takes an exclusive,
+non-blocking lock on it (`flock` on macOS and Linux; on Windows a byte lock on `journal.jsonl.lock`, since Windows
+byte locks would also block reading the journal), so a second sender on the same journal refuses to start.
 
 | Event | Meaning on replay |
 |---|---|

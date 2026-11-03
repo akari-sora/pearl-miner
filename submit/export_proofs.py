@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 
-from pearl_submit import keccak256 as _keccak_py, wallet_problem  # same folder
+from pearl_submit import keccak256 as _keccak_py, safe_stdio, wallet_problem  # same folder
 
 try:
     from Crypto.Hash import keccak as _keccak_c
@@ -28,6 +28,7 @@ def k256(b):
 
 
 def main():
+    safe_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
     ap.add_argument("--wallet", default=os.environ.get("PEARL_WALLET"),
@@ -40,7 +41,7 @@ def main():
     WALLET = a.wallet
     SEED = k256(PUBLIC_CHALLENGE + bytes(12) + bytes.fromhex(WALLET.lower()[2:]))  # abi.encode(bytes32, address)
     seen, out, bad = set(), [], 0
-    with open(a.csv) as f:
+    with open(a.csv, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or "," not in line:
@@ -56,7 +57,7 @@ def main():
             seen.add(p_hex)
             out.append([n_hex, p_hex])
     tmp = a.out + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"wallet": WALLET, "seed": "0x" + SEED.hex(), "count": len(out), "proofs": out}, f)
     os.replace(tmp, a.out)
     print(f"{len(out)} verified unique proofs -> {a.out}; rejected {bad}")

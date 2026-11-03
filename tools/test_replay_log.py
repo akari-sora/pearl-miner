@@ -10,7 +10,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from replay_log import Redactor, clock_seconds  # noqa: E402
+from replay_log import Redactor, clock_seconds, safe_stdio  # noqa: E402
+
+safe_stdio()
 
 FAILED = []
 H64 = "deadbeef" * 8                      # a made-up 64-hex tx hash

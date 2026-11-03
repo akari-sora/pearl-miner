@@ -8,6 +8,7 @@ import collections
 import re
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -17,6 +18,8 @@ import types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pearl_submit as ps  # noqa: E402
 
+ps.safe_stdio()
+REAL_BAW = ps.baw  # run_case swaps in the fake chain's baw; platform_checks() starts a real process
 ps.configure("0x00000000000000000000000000000000DeaDBeef", "demoagent")  # dummy identity: the fake chain does not check it
 REAL_CHAIN_STATE = ps.chain_state  # run_case replaces ps.chain_state with the fake chain's
 
@@ -165,7 +168,8 @@ class FakeChain:
 
 def make_proofs(path, n):
     proofs = [["0x%064x" % (i + 1), "0x%064x" % (i + 7)] for i in range(n)]
-    json.dump({"wallet": ps.WALLET, "proofs": proofs}, open(path, "w"))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"wallet": ps.WALLET, "proofs": proofs}, f)
 
 
 def run_case(name, chain, n_proofs, journal=None, **kw):
@@ -190,11 +194,128 @@ def run_case(name, chain, n_proofs, journal=None, **kw):
     try:
         r.run()
     finally:
-        ps.fcntl.flock(r.j.f.fileno(), ps.fcntl.LOCK_UN)
+        r.sender_lock.release()
     dup = list(chain.violations)
     print(f"[{name}] {time.time() - t0:.1f}s sent={r.sent} mined={r.mined} reverted={r.reverted} "
           f"stop={r.stop_reason!r} unsafe_resends={len(dup)} resends_after_revert={sum(1 for c_ in chain.sent_proofs.values() if c_ > 1) - len(set(dup))}", flush=True)
     return r, a, dup
+
+
+FAKE_CLI = r'''
+import json, os, sys, time
+sys.stdout.reconfigure(encoding="utf-8")
+if os.environ.get("FAKE_CLI_PIDFILE"):
+    with open(os.environ["FAKE_CLI_PIDFILE"], "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+if os.environ.get("FAKE_CLI_SLEEP"):
+    time.sleep(float(os.environ["FAKE_CLI_SLEEP"]))
+print(json.dumps({"success": True, "data": {"args": sys.argv[1:], "symbol": "\u73cd\u73e0\u5e01"}}, ensure_ascii=False))
+'''
+
+
+def make_fake_cli(d):
+    """A fake baw in d, started the way the real one is: an executable on POSIX, a .cmd shim (cmd.exe) on Windows."""
+    script = os.path.join(d, "fake_cli.py")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write(FAKE_CLI)
+    if ps.WINDOWS:
+        path = os.path.join(d, "baw.cmd")
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            f.write(f'@"{sys.executable}" "%~dp0fake_cli.py" %*\r\n')
+    else:
+        path = os.path.join(d, "baw")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+        os.chmod(path, 0o755)
+    return path
+
+
+def platform_checks(expect):
+    """The pieces that differ between macOS, Linux and Windows, with real files and processes."""
+    def check(name, cond, got=None):
+        print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + ("" if cond or got is None else f"   got: {got!r}"))
+        expect(name, cond)
+
+    print(f"[platform] {sys.platform}, Python {sys.version.split()[0]}, stdout encoding {sys.stdout.encoding}")
+    here = os.path.dirname(os.path.abspath(__file__))
+    tmp = tempfile.mkdtemp(prefix="xplat-")
+
+    # journal lock: refused in this process and in another one while held; free again after release()
+    jp = os.path.join(tmp, "j.jsonl")
+    j1 = ps.Journal(jp)
+    lk = ps.SenderLock(j1)
+    try:
+        ps.SenderLock(ps.Journal(jp))
+        same = "taken twice"
+    except OSError:
+        same = "refused"
+    probe = ("import sys; sys.path.insert(0, sys.argv[1]); import pearl_submit as ps\n"
+             "try:\n    ps.SenderLock(ps.Journal(sys.argv[2])).release()\nexcept OSError:\n    sys.exit(3)\n")
+    other = subprocess.run([sys.executable, "-c", probe, here, jp], timeout=60).returncode
+    j1.write(ev="note", text="\u73cd\u73e0\u5e01")  # the journal stays writable and readable while locked
+    back = [r.get("text") for r in ps.Journal(jp).read()]
+    lk.release()
+    other_after = subprocess.run([sys.executable, "-c", probe, here, jp], timeout=60).returncode
+    check("lock: a second holder in this process is refused", same == "refused", same)
+    check("lock: another process is refused while held", other == 3, other)
+    check("lock: the journal is read back while locked (UTF-8)", back == ["\u73cd\u73e0\u5e01"], back)
+    check("lock: another process gets it after release()", other_after == 0, other_after)
+
+    # cmd.exe guard (checked on every OS by pretending to be on Windows)
+    saved = ps.WINDOWS, ps.BAW
+    ps.WINDOWS, ps.BAW = True, r"C:\npm\baw.cmd"
+    try:
+        ok_cmd = ps.baw_cmd(["contract-call", "preview", "--inputData", "0xab12", "--slippage", "1.5"])
+        refused = []
+        for bad in ("a&b", "100%", "x y", 'q"', "a|b", "x^", "!x", "<x", "x>"):
+            try:
+                ps.baw_cmd(["market-order", bad])
+            except ps.UnsafeArg:
+                refused.append(bad)
+        ps.BAW = r"C:\Program Files\baw\baw.exe"  # an .exe gets its arguments without cmd.exe: no guard
+        exe_cmd = ps.baw_cmd(["x y"])
+    finally:
+        ps.WINDOWS, ps.BAW = saved
+    check("cmd.exe guard: plain arguments pass", ok_cmd[-1] == "--json" and ok_cmd[0].endswith("baw.cmd"))
+    check("cmd.exe guard: & % space quote | ^ ! < > refused", len(refused) == 9, refused)
+    check("cmd.exe guard: not applied to an .exe", exe_cmd[1:] == ["x y", "--json"])
+    kind, _ = ps.judge_preview({"success": False, "error": {"code": "UNSAFE_ARG", "message": "argument not safe"}})
+    check("UNSAFE_ARG stops the run (refuse, not transient)", kind == "refuse", kind)
+
+    # a real baw process found on PATH: arguments, UTF-8 output, and a timeout that kills the whole process tree
+    bindir = tempfile.mkdtemp(prefix="xplat-bin-")
+    fake = make_fake_cli(bindir)
+    saved_path, saved_baw = os.environ.get("PATH", ""), ps.BAW
+    os.environ["PATH"] = bindir + os.pathsep + saved_path
+    try:
+        found = ps.find_baw()
+        check("find_baw: the fake on PATH" + (" (baw.cmd)" if ps.WINDOWS else ""),
+              os.path.normcase(found or "") == os.path.normcase(fake), found)
+        ps.BAW = found
+        j, dt = REAL_BAW(["wallet", "status"], timeout=30)
+        d = j.get("data") or {}
+        check("baw: arguments arrive unchanged", d.get("args") == ["wallet", "status", "--json"], j)
+        check("baw: UTF-8 output decoded", d.get("symbol") == "\u73cd\u73e0\u5e01", d.get("symbol"))
+        pidfile = os.path.join(tmp, "cli.pid")
+        os.environ["FAKE_CLI_SLEEP"], os.environ["FAKE_CLI_PIDFILE"] = "30", pidfile
+        t0 = time.time()
+        j, _ = REAL_BAW(["wallet", "status"], timeout=3)
+        took = time.time() - t0
+        os.environ.pop("FAKE_CLI_SLEEP")
+        os.environ.pop("FAKE_CLI_PIDFILE")
+        check("baw timeout: TIMEOUT within a few seconds", (j.get("error") or {}).get("code") == "TIMEOUT" and took < 9,
+              (j, round(took, 1)))
+        import pearl_sell  # its process check: the sleeping fake (a grandchild on Windows) must be gone
+        gone = False
+        for _ in range(50):
+            if not pearl_sell.mining_run_alive(pidfile):
+                gone = True
+                break
+            time.sleep(0.1)
+        check("baw timeout: the fake process is gone (process tree killed)", gone)
+    finally:
+        os.environ["PATH"] = saved_path
+        ps.BAW = saved_baw
 
 
 def main():
@@ -271,7 +392,7 @@ def main():
     # STOP file mid-run: after the stop record, no execute may be launched
     c = FakeChain(open_in=1, cap_proofs=10**6)
     tmp2 = tempfile.mkdtemp()
-    threading.Timer(3.0, lambda: open(os.path.join(tmp2, "STOP"), "w").close()).start()
+    threading.Timer(3.0, lambda: open(os.path.join(tmp2, "STOP"), "w", encoding="utf-8").close()).start()
     r, a, dup = run_case("STOP file mid-run", c, 16 * 200, stop_file=os.path.join(tmp2, "STOP"))
     j = ps.Journal(a.journal).read()
     t_stop = min(rec["t"] for rec in j if rec.get("ev") == "stop")
@@ -298,7 +419,7 @@ def main():
     c.txs["_r" + txh] = False
     tmp3 = tempfile.mkdtemp()
     jp3 = os.path.join(tmp3, "j.jsonl")
-    with open(jp3, "w") as f:
+    with open(jp3, "w", encoding="utf-8") as f:
         for rec in [{"ev": "attempt", "requestId": "x", "proofs": [p1], "est": 1, "t": 1},
                     {"ev": "broadcast", "tx": txh, "requestId": "x", "proofs": [p1], "nonces": ["0x1"], "est": 1, "t": 2},
                     {"ev": "used_elsewhere", "proofs": [p1], "t": 3}]:
@@ -590,12 +711,15 @@ def main():
     tmp = tempfile.mkdtemp()
     jp = os.path.join(tmp, "j.jsonl")
     holder = ps.Journal(jp)
-    ps.fcntl.flock(holder.f.fileno(), ps.fcntl.LOCK_EX | ps.fcntl.LOCK_NB)
+    held = ps.SenderLock(holder)
     try:
         run_case("second sender", FakeChain(open_in=1, cap_proofs=16), 16, journal=jp)
         expect("journal lock", False)
     except SystemExit as e:
         print(f"[second sender] refused: {str(e).replace(tmp, '<tmp>')}")
+    held.release()
+
+    platform_checks(expect)
 
     # per-day reward floor: same numbers as the contract's rewardForClaim on mainnet, and it falls every day
     def reward_for_claim(n):

@@ -2,12 +2,13 @@
 # Copyright (C) 2026 Akari Sora
 """Offline simulation of pearl_sell.py: fake baw + a constant-liquidity pool model calibrated on the
 PancakeSwap Infinity pool (evening of 2026-11-03: L = 7.06e17, 431,426 coins per BNB, fee 0.3726%)."""
-import json, math, os, sys, tempfile, time
+import json, math, os, subprocess, sys, tempfile, time
 from decimal import Decimal
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 os.environ["PEARL_WALLET"] = "0x00000000000000000000000000000000DeaDBeef"  # dummy: balances and quotes are faked
 import pearl_sell as ps
+ps._submit.safe_stdio()
 
 FAILED = []
 
@@ -178,10 +179,11 @@ def run(name, env, argv, run_alive=False, stop_file=False, no_pid=False, tmp=Non
     tmp = tmp or tempfile.mkdtemp(prefix="sell-")
     ps.HERE = tmp
     if stop_file:
-        open(os.path.join(tmp, "STOP"), "w").close()
+        open(os.path.join(tmp, "STOP"), "w", encoding="utf-8").close()
     pid = os.path.join(tmp, "run.pid")
     if not no_pid:
-        open(pid, "w").write(str(os.getpid() if run_alive else 999999))
+        with open(pid, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid() if run_alive else 999999))
     elif os.path.exists(pid):
         os.remove(pid)
     ps.baw = env.baw
@@ -299,7 +301,8 @@ expect("dust: no swap", e.swaps == [])
 e = Env(300_000)
 run("received amount", e, ["run"])
 import json as _json
-recs = [_json.loads(x) for x in open(os.path.join(ps.HERE, "sell.jsonl"))]
+with open(os.path.join(ps.HERE, "sell.jsonl"), encoding="utf-8") as _f:
+    recs = [_json.loads(x) for x in _f]
 end = [r for r in recs if r.get("ev") == "end"]
 expect("received BNB summed from toTokenActualQty", end and float(end[0]["bnb"]) > 0.5)
 
@@ -442,7 +445,7 @@ expect("sporadic failures: 80% sold", e.bal == 60_000 * 10 ** 8)
 
 # 41. an old journal (> 12 h) with a smaller keep is ignored
 tmpd = tempfile.mkdtemp(prefix="sell-old-")
-with open(os.path.join(tmpd, "sell.jsonl"), "w") as f:
+with open(os.path.join(tmpd, "sell.jsonl"), "w", encoding="utf-8") as f:
     f.write(json.dumps({"ev": "start", "start_bal": 100_000 * 10 ** 8, "keep": 20_000 * 10 ** 8, "args": {},
                         "t": CLOCK.now() - 20 * 3600}) + "\n")
 e = Env(300_000)
@@ -553,6 +556,36 @@ for what, bad in (("38 hex digits", "0x" + "ab" * 19), ("a wrong EIP-55 checksum
     e = Env(300_000)
     err = run(f"bad wallet: {what}", e, ["run", "--mode", "now", "--wallet", bad])
     expect(f"bad --wallet refused: {what}", err and "--wallet or PEARL_WALLET" in err and e.swaps == [])
+
+# 57. the mining-run check with real processes (Windows: OpenProcess, never os.kill): a running child is alive,
+# the same child after it exits is not, and pid files in UTF-16 or with a byte-order mark (Windows PowerShell 5)
+# are read; an unreadable one counts as alive
+tmpd = tempfile.mkdtemp(prefix="sell-pid-")
+pidf = os.path.join(tmpd, "run.pid")
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+try:
+    with open(pidf, "w", encoding="utf-8") as f:
+        f.write(f"{child.pid}\n")
+    alive_running = ps.mining_run_alive(pidf)
+    with open(pidf, "w", encoding="utf-16") as f:  # what `$p.Id > run.pid` writes in Windows PowerShell 5
+        f.write(f"{child.pid}\r\n")
+    alive_utf16 = ps.mining_run_alive(pidf)
+    with open(pidf, "w", encoding="utf-8-sig") as f:
+        f.write(f"{child.pid}")
+    alive_bom = ps.mining_run_alive(pidf)
+finally:
+    child.kill()
+    child.wait()
+alive_after = ps.mining_run_alive(pidf)
+with open(pidf, "w", encoding="utf-8") as f:
+    f.write("not a pid")
+alive_garbage = ps.mining_run_alive(pidf)
+print(f"[run.pid with real processes] running={alive_running} utf16={alive_utf16} bom={alive_bom} "
+      f"exited={alive_after} garbage={alive_garbage}")
+expect("run.pid: a running process is alive", alive_running)
+expect("run.pid: UTF-16 and byte-order-mark pid files are read", alive_utf16 and alive_bom)
+expect("run.pid: the process after it exited is not alive", not alive_after)
+expect("run.pid: an unreadable pid file counts as alive", alive_garbage)
 
 print("FAILED:", FAILED or "none")
 sys.exit(1 if FAILED else 0)

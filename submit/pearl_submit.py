@@ -34,7 +34,6 @@ an attempt stay blocked forever unless a receipt later shows that very tx revert
 """
 import argparse
 import collections
-import fcntl
 import json
 import os
 import queue
@@ -47,6 +46,12 @@ import threading
 import time
 import traceback
 import urllib.request
+
+WINDOWS = os.name == "nt"
+if WINDOWS:
+    import msvcrt
+else:
+    import fcntl
 
 WALLET = ""   # set by configure(): --wallet or PEARL_WALLET
 HANDLE = ""   # set by configure(): --handle or PEARL_HANDLE (raw handle, no ".ai")
@@ -205,12 +210,133 @@ def say(*a):
         print(now(), *a, flush=True)
 
 
+# ---------------------------------------------------------------- platform (macOS, Linux, Windows)
+def safe_stdio():
+    """Printing 珍珠币 must never crash. A Windows console takes Unicode, but redirected output (a log file) uses the
+    ANSI code page (cp1252, cp950, ...): there it becomes UTF-8. Elsewhere a non-UTF-8 stream prints '?' instead."""
+    for s in (sys.stdout, sys.stderr):
+        enc = str(getattr(s, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if enc == "utf8" or not hasattr(s, "reconfigure"):
+            continue
+        try:
+            s.reconfigure(**({"encoding": "utf-8"} if WINDOWS else {}), errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+class SenderLock:
+    """Keeps a second sender off a journal: exclusive and non-blocking (OSError while another holder has it),
+    released by release() or when the process exits.
+    POSIX: flock on the journal file itself. Windows: msvcrt.locking on byte 0 of <journal>.lock, because Windows
+    byte locks also block reads and the journal is read again while it is held."""
+
+    def __init__(self, journal):
+        if WINDOWS:
+            fd = os.open(journal.path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError:
+                os.close(fd)
+                raise
+        else:
+            fd = journal.f.fileno()
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.fd, self.journal = fd, journal  # the journal's open file carries the POSIX lock: keep it open
+
+    def release(self):
+        fd, self.fd = self.fd, None
+        if fd is None:
+            return
+        if WINDOWS:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            finally:
+                os.close(fd)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+BAW = None  # full path of the baw CLI, set by main() with find_baw(); None runs plain "baw"
+_CMD_SAFE = re.compile(r"[A-Za-z0-9_.,:=+/@-]*\Z")
+
+
+class UnsafeArg(Exception):
+    """An argument cmd.exe would interpret; never passed to a .cmd/.bat shim."""
+
+
+def find_baw():
+    """Full path of the baw CLI on PATH, or None. On Windows npm installs global CLIs as baw.cmd next to an
+    extensionless shell script that Windows cannot start, so only .exe/.cmd/.bat/.com count there."""
+    if not WINDOWS:
+        return shutil.which("baw")
+    exts = [e.lower() for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep)]
+    exts = [e for e in exts if e in (".com", ".exe", ".bat", ".cmd")] or [".exe", ".cmd", ".bat"]
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        d = d.strip().strip('"')
+        for e in exts:
+            p = os.path.join(d, "baw" + e) if d else ""
+            if p and os.path.isfile(p):
+                return p
+    return None
+
+
+def baw_cmd(args):
+    """[baw, *args, "--json"]. A .cmd/.bat shim runs through cmd.exe, which would act on & | < > ^ % ! " and
+    spaces: such arguments are refused (UnsafeArg). baw arguments here are flags, hex and numbers."""
+    exe = BAW or "baw"
+    if WINDOWS and exe.lower().endswith((".cmd", ".bat")):
+        bad = [x for x in args if not _CMD_SAFE.match(str(x))]
+        if bad:
+            raise UnsafeArg(f"argument not safe to pass through cmd.exe: {bad[0]!r}")
+    return [exe, *args, "--json"]
+
+
+def start_baw(args, own_group=False):
+    """Start baw with UTF-8 pipes. own_group: Ctrl-C in the terminal does not reach it (POSIX: a new session;
+    Windows: a new process group), so a call in flight is never cut off by it."""
+    kw = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    if own_group:
+        kw.update(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) if WINDOWS else kw.update(start_new_session=True)
+    return subprocess.Popen(baw_cmd(args), **kw)
+
+
+def kill_tree(p):
+    """Kill a baw process and its children. On Windows baw.cmd runs cmd.exe -> node.exe; killing cmd.exe alone
+    would leave node.exe holding the output pipes."""
+    if WINDOWS:
+        tk = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+        try:
+            subprocess.run([tk, "/T", "/F", "/PID", str(p.pid)], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        p.kill()
+    except OSError:
+        pass
+
+
+def finish_baw(p, timeout):
+    """(stdout, stderr) of a started baw; on timeout the process tree is killed and TimeoutExpired raised."""
+    try:
+        return p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(p)
+        try:
+            p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+
+
 # ---------------------------------------------------------------- journal
 class Journal:
     def __init__(self, path):
         self.path = path
         self.lock = threading.Lock()
-        self.f = open(path, "a", buffering=1)
+        self.f = open(path, "a", buffering=1, encoding="utf-8")
 
     def write(self, **rec):
         rec["t"] = time.time()
@@ -223,7 +349,7 @@ class Journal:
     def read(self):
         out = []
         if os.path.exists(self.path):
-            with open(self.path) as f:
+            with open(self.path, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     try:
                         out.append(json.loads(line))
@@ -437,9 +563,6 @@ def baw(args, journal=None, timeout=60, launch_lock=None, gate=None):
     t0 = time.time()
     out = err = ""
     try:
-        cmd = ["baw", *args, "--json"]
-        kw = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                  errors="replace", start_new_session=True)
         if launch_lock is not None:
             with launch_lock:
                 if gate is not None and not gate():
@@ -447,15 +570,10 @@ def baw(args, journal=None, timeout=60, launch_lock=None, gate=None):
                     if journal:
                         journal.write(ev="baw", args=args, secs=0, resp=j)
                     return j, 0.0
-                p = subprocess.Popen(cmd, **kw)
+                p = start_baw(args, own_group=True)
         else:
-            p = subprocess.Popen(cmd, **kw)
-        try:
-            out, err = p.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            p.communicate()
-            raise
+            p = start_baw(args, own_group=True)
+        out, err = finish_baw(p, timeout)
         out, err = out or "", err or ""
         i = out.find("{")
         j = json.loads(out[i:]) if i >= 0 else {"success": False, "error": {
@@ -464,6 +582,8 @@ def baw(args, journal=None, timeout=60, launch_lock=None, gate=None):
             j = {"success": False, "error": {"code": "BAD_JSON", "message": out[-800:]}}
     except subprocess.TimeoutExpired:
         j = {"success": False, "error": {"code": "TIMEOUT", "message": f"baw {args[:2]} > {timeout}s"}}
+    except UnsafeArg as e:
+        j = {"success": False, "error": {"code": "UNSAFE_ARG", "message": str(e)}}
     except ValueError:
         j = {"success": False, "error": {"code": "BAD_JSON", "message": (out + err)[-800:]}}
     except OSError as e:
@@ -544,7 +664,8 @@ def canon(h):
 
 
 def load_proofs(path):
-    d = json.load(open(path))
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
     assert d["wallet"].lower() == WALLET.lower(), "proofs are for another wallet"
     seen, seen_n, out = set(), set(), []
     for nonce, proof in d["proofs"]:
@@ -604,7 +725,7 @@ def blocked_from_journal(recs):
 # ---------------------------------------------------------------- check
 def cmd_check(a):
     ok = True
-    say("python", sys.version.split()[0], "baw at", shutil.which("baw"))
+    say("python", sys.version.split()[0], "baw at", BAW or find_baw())
     say(f"wallet {WALLET}; agentId = keccak256({HANDLE!r}) = {AGENT_ID:#066x}")
     owner = registry_owner()
     say(f"registry ownerOf(agentId) = {owner or 'none (handle not registered)'}; "
@@ -785,7 +906,7 @@ class Runner:
         self.a = a
         self.j = Journal(a.journal)
         try:
-            fcntl.flock(self.j.f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.sender_lock = SenderLock(self.j)
         except OSError:
             sys.exit(f"another run already holds {a.journal}; refusing to start a second sender")
         self.lock = threading.Lock()
@@ -1463,7 +1584,13 @@ class Runner:
         def on_signal(signum, frame):  # no locks here: the watcher turns this into a stop
             self.signalled = True
 
-        old = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
+        old = {}  # Windows: SIGINT is Ctrl-C, SIGBREAK Ctrl-Break; SIGTERM is accepted but never sent (use the STOP file)
+        for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+            if hasattr(signal, name):
+                try:
+                    old[getattr(signal, name)] = signal.signal(getattr(signal, name), on_signal)
+                except (ValueError, OSError):
+                    pass
         threads = [threading.Thread(target=self.guarded, args=(self.watcher,), daemon=True),
                    threading.Thread(target=self.guarded, args=(self.tracker,))]
         threads += [threading.Thread(target=self.guarded, args=(self.previewer, k)) for k in range(a.previewers)]
@@ -1479,7 +1606,10 @@ class Runner:
                 last = time.time()
             time.sleep(0.5)
         for sig, h in old.items():
-            signal.signal(sig, h)
+            try:
+                signal.signal(sig, h)
+            except (ValueError, OSError, TypeError):
+                pass
         # workers can see a stop condition and exit before the watcher records it: record it here
         if self.signalled:
             self.stop("signal (Ctrl-C / SIGTERM)")
@@ -1519,10 +1649,11 @@ def cmd_run(a):
     try:
         r.run()
     finally:
-        fcntl.flock(r.j.f.fileno(), fcntl.LOCK_UN)
+        r.sender_lock.release()
 
 
 def main():
+    safe_stdio()
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("check", "rehearse", "run"):
@@ -1559,8 +1690,11 @@ def main():
     if a.cmd == "run" and a.executors != 1:
         sys.exit("--executors must be 1: the wallet backend rejects concurrent executes (351716)")
     configure(a.wallet, a.handle, getattr(a, "min_reward", None))
-    if not shutil.which("baw"):
-        sys.exit("baw not found on PATH")
+    global BAW
+    BAW = find_baw()
+    if not BAW:
+        sys.exit("baw not found on PATH" + (" (Windows: baw.cmd from `npm install -g`; see docs/PLATFORMS.md)"
+                                            if WINDOWS else ""))
     {"check": cmd_check, "rehearse": cmd_rehearse, "run": cmd_run}[a.cmd](a)
 
 
