@@ -890,6 +890,72 @@ def main():
     expect("check on day 43: says there is no floor from day 44", any("no reward floor" in x for x in out))
     ps.MIN_REWARD_PER_PROOF = keep
 
+    # check with a proofs file: proofs sent before (journal) and proofs used elsewhere (not in the journal)
+    def check_case(name, n, used_nonces, journal_nonces=(), sim_error=None):
+        tmp = tempfile.mkdtemp()
+        pf, jf = os.path.join(tmp, "proofs.json"), os.path.join(tmp, "journal.jsonl")
+        make_proofs(pf, n)  # nonce i+1, proof i+7
+        if journal_nonces:
+            prs = ["0x%064x" % (i + 6) for i in journal_nonces]
+            with open(jf, "w", encoding="utf-8") as f:
+                for rec in ({"ev": "attempt", "requestId": "r1", "proofs": prs},
+                            {"ev": "broadcast", "requestId": "r1", "tx": "0x" + "ab" * 32, "proofs": prs},
+                            {"ev": "receipt", "tx": "0x" + "ab" * 32, "status": 1, "fee": 10 ** 13, "mined": len(prs)}):
+                    f.write(json.dumps(rec) + "\n")
+        used, sims = set(used_nonces) | set(journal_nonces), []
+
+        def simulate(cd):
+            nonces = {int(cd[2 + 8 + 64 * 4 + 64 * k:2 + 8 + 64 * 5 + 64 * k], 16)
+                      for k in range(int(cd[2 + 8 + 64 * 3:2 + 8 + 64 * 4], 16))}
+            sims.append(nonces)
+            if sim_error:
+                return "revert", sim_error
+            return ("revert", ps.PROOF_USED) if nonces & used else ("revert", ps.DAILY_LIMIT)
+        saved = {k: getattr(ps, k) for k in ("baw", "latest_block", "chain_state", "owner_burned", "call", "simulate",
+                                             "proof_used", "bnb_balance", "registry_owner", "say")}
+        out = []
+        ps.baw = lambda args, *k, **kw: ({"success": True, "data": {"status": "CONNECTED"}}, 0.01)
+        ps.latest_block = lambda: (1, int(time.time()))
+        ps.chain_state = lambda: (1, 0, 91 * 10 ** 8)
+        ps.owner_burned = lambda: True
+        ps.call = lambda data: "0x" + "0" * 64
+        ps.simulate = simulate
+        ps.proof_used = lambda p: (int(p, 16) - 6) in used
+        ps.bnb_balance = lambda: 10 ** 16
+        ps.registry_owner = lambda: ps.WALLET.lower()
+        ps.say = lambda *x: out.append(" ".join(str(v) for v in x))
+        try:
+            ps.cmd_check(types.SimpleNamespace(proofs=pf, journal=jf, min_reward=None))
+        finally:
+            for k, v in saved.items():
+                setattr(ps, k, v)
+        ps.MIN_REWARD_PER_PROOF = keep
+        print(f"[check: {name}] " + " | ".join(x for x in out if "proof" in x or "WARNING" in x or "CHECK" in x)[:400])
+        return out, sims, os.path.exists(jf)
+
+    out, sims, _ = check_case("journal covers the used front", 200, (), journal_nonces=range(1, 33))
+    expect("check: proofs sent before (journal, front of the file) are skipped: CHECK OK",
+           out[-1] == "CHECK OK" and not any("WARNING" in x for x in out) and any("32 already sent" in x for x in out))
+    expect("check: the simulated batch is run's first batch after them", sims == [set(range(33, 49))])
+    out, sims, made = check_case("used elsewhere, no journal", 200, range(1, 21))
+    expect("check: proofs used on chain but not in the journal: WARNING, still CHECK OK",
+           out[-1] == "CHECK OK" and any(x.startswith("WARNING: ") and "will be skipped by run" in x for x in out)
+           and not any("CHECK HAS PROBLEMS" in x for x in out))
+    expect("check: simulates the first batch past the used proofs", sims[-1] == set(range(33, 49)))
+    expect("check: never creates a journal", not made)
+    out, sims, _ = check_case("day-1 proofs used, journal lost", 300, range(1, 193))
+    expect("check: 192 used proofs at the front and no journal: WARNING, CHECK OK",
+           out[-1] == "CHECK OK" and any("first 192 proofs" in x for x in out) and sims[-1] == set(range(193, 209)))
+    out, sims, _ = check_case("one used proof the samples miss", 300, (5,))
+    expect("check: a used proof outside the samples still gets a WARNING, CHECK OK",
+           out[-1] == "CHECK OK" and any(x.startswith("WARNING: the first 16 proofs") for x in out))
+    out, _, _ = check_case("every batch in reach holds a used proof", 200, range(1, 201))
+    expect("check: no unused proof in reach: HAS PROBLEMS", out[-1] == "CHECK HAS PROBLEMS")
+    out, _, _ = check_case("all sent", 40, (), journal_nonces=range(1, 41))
+    expect("check: every proof sent before: HAS PROBLEMS", out[-1] == "CHECK HAS PROBLEMS")
+    out, _, _ = check_case("other simulation failure", 200, (), sim_error="0xd9c1988f")
+    expect("check: InvalidSolution is not relaxed: HAS PROBLEMS", out[-1] == "CHECK HAS PROBLEMS")
+
     print(f"[summary] {checks[0]} checks")
     print("FAILED:", fails if fails else "none")
     sys.exit(1 if fails else 0)

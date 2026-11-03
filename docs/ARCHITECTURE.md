@@ -143,6 +143,19 @@ An execute is launched only if `committed + estimate ≤ budget`, where the esti
 `gasLimit × max(0.15 gwei, 1.5 × highest gas price seen)`. Every 3 s the watcher also checks that the live balance
 minus everything in flight stays above `--keep-bnb`.
 
+**The budget is a running total for the journal, not a daily allowance.** "Fees already paid" and the reservations
+come from the whole journal, so every run that uses the same `--journal` counts against the same `--budget-bnb`.
+With the default 0.045 BNB and 0.0006 BNB spent on day 1, day 2 has 0.0444 BNB left. Two ways to give a later day
+more room:
+
+- **Keep one journal for one set of proofs (the safe way) and raise `--budget-bnb`** by what earlier runs spent:
+  room for this run = `--budget-bnb` − fees so far − reservations. `pearl.py auto` prints that number in its plan
+  ("up to … BNB for this run") and refuses to start when it is 0.
+- **A new `--journal` per day** restarts the count, but only for proofs that were never sent with another journal.
+  The journal is what keeps a sent proof from being tried again: with a fresh journal, every batch that holds an
+  already-used proof fails its simulation (`ProofAlreadyUsed`) and costs a preview at the opening before `run` drops
+  those proofs. `check` warns when it samples such proofs.
+
 ### The journal
 
 `journal.jsonl` is append-only; every record is written with `flush` + `fsync`. The run takes an exclusive,
@@ -203,7 +216,7 @@ files together.
 
 | Harness | What it proves |
 |---|---|
-| `submit/test_submit.py` | the submitter against a fake chain and a fake `baw`: cap filling, risk items, execute timeouts, restarts from the journal, backend lag at the opening, transient errors, gas budget, `351716`, near-cap splitting, a second sender, a disconnected session, input checks (wallet and EIP-55, handle, `--min-reward`, `--day`), `check` on day 43 without a proofs file, and more. No proof is ever sent twice. |
+| `submit/test_submit.py` | the submitter against a fake chain and a fake `baw`: cap filling, risk items, execute timeouts, restarts from the journal, backend lag at the opening, transient errors, gas budget, `351716`, near-cap splitting, a second sender, a disconnected session, input checks (wallet and EIP-55, handle, `--min-reward`, `--day`), `check` on day 43 without a proofs file, `check` with a journal (proofs sent before are skipped) and with proofs used elsewhere (a warning, not a failure), and more. No proof is ever sent twice. |
 | `miner/test_autotune.py` | the miner's launch sizing without a GPU: a launch timed at 0 s, a negative or tiny time never grows the work, growth is at most 8x per step, and simulated devices from 2 MH/s to 10 GH/s never get a launch near the 2 s Windows watchdog. |
 | `submit/test_sell.py` | the seller against a constant-liquidity pool model calibrated on the real pool: impact cap, schedule, pullbacks, partial fills, refunds, lagging balance reads, timeouts, restarts, a `--wallet` that is not the wallet `baw` is signed in to. |
 | `submit/fork_rehearsal/run_fork.py` | the real contract on an anvil fork of BSC. Your wallet is impersonated (no key), a fake `baw` turns preview / execute into `eth_call` / `eth_sendTransaction` on `127.0.0.1` only (the script refuses a local port that is already in use and stops at once if anvil exits while starting), the day before the target is set full so nothing can be mined early, the next day opens live 30 s after the start and a competitor eats the cap. It then checks that every proof in a successful transaction is used on chain, that the journal replays to nothing reserved or open, that the fees in the journal equal the balance spent, and that the run stopped because the cap was full. |

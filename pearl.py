@@ -43,8 +43,9 @@ SOLD_RE = re.compile(r"end balance ([0-9,.]+) \S+ \(sold (-?[0-9,.]+)\); BNB fro
 CHECK_OK_RE = re.compile(r"\bCHECK OK\s*$")
 PROBLEM_RES = [re.compile(p) for p in (
     r"matches the wallet: False", r"wallet session: (?!CONNECTED\b)", r'"success": false',
-    r"owner burned \(nobody can pause/resume\): False", r"paused now: True", r"\bused=True",
-    r"from wallet now: (?!ok\b|revert DailyLimitReached\b)", r"Traceback|Error\b|not found|refus|^set the ")]
+    r"owner burned \(nobody can pause/resume\): False", r"paused now: True", r"no proof is left",
+    r"used on chain: copy", r"from wallet now: (?!ok\b|revert DailyLimitReached\b)",
+    r"Traceback|Error\b|not found|refus|^set the ")]
 DECIMALS = 8
 TAIL_S = 0.2          # how often the log is read while a child runs
 BALANCE_WAIT = 5.0    # seconds between token balance reads after the run
@@ -78,7 +79,7 @@ class Paths:
     def __init__(self, d, csv):
         j = os.path.join
         self.dir, self.csv = d, csv
-        self.proofs, self.check_proofs = j(d, "proofs.json"), j(d, "proofs.check.json")
+        self.proofs = j(d, "proofs.json")
         self.journal, self.stop = j(d, "journal.jsonl"), j(d, "STOP")
         self.run_log, self.run_pid = j(d, "run.log"), j(d, "run.pid")
         self.sell_log, self.sell_journal = j(d, "sell.log"), j(d, "sell.jsonl")
@@ -303,25 +304,14 @@ def cmd_auto(a):
         raise Refusal(EXIT_REFUSED, f"the gas budget --budget-bnb {a.budget_bnb:g} is already used by earlier runs in "
                                     f"{short(P.journal)} ({(fees0 + reserved0) / 1e18:.6f} BNB): pass a higher one")
 
-    keep_set = set(usable)  # check reads the proofs the run will send, not ones sent on earlier days
-    with open(P.proofs, encoding="utf-8") as f:
-        d = json.load(f)
-    rows = [[n, p] for n, p in d["proofs"] if ps.canon(p) in keep_set]
-    with open(P.check_proofs, "w", encoding="utf-8") as f:
-        json.dump({"wallet": d["wallet"], "seed": d.get("seed"), "count": len(rows), "proofs": rows}, f)
-    out(f"==== check (read-only; {len(rows):,} proofs not sent before) ====")
-    try:
-        rc, lines = run_captured(child_cmd("submit", "check", "--proofs", P.check_proofs))
-    finally:
-        os.remove(P.check_proofs)
+    out("==== check (read-only) ====")  # check skips the proofs the journal shows as sent, like run
+    rc, lines = run_captured(child_cmd("submit", "check", "--proofs", P.proofs, "--journal", P.journal))
     if not any(CHECK_OK_RE.search(x) for x in lines):
         out("\ncheck found problems:")
         for x in problem_lines(lines):
             out("  " + x)
-        if any("used=True" in x for x in lines):
-            out(f"  hint: some proofs are already used on chain but not recorded in {short(P.journal)}. If an earlier "
-                "run used another journal, copy it here as journal.jsonl.")
         raise Refusal(EXIT_REFUSED, f"check did not end with CHECK OK (exit {rc}); fix the lines above and start again")
+    warnings = [x[x.index("WARNING:"):] for x in lines if "WARNING:" in x]
 
     # 2. the plan
     out("\n==== the plan ====")
@@ -331,13 +321,16 @@ def cmd_auto(a):
     out(f"        {a.minutes:g} minutes after the opening, or when {short(P.stop)} exists.")
     out(f"Proofs  {len(usable):,} usable ({len(proofs):,} in {short(P.proofs)}, "
         f"{len(proofs) - len(usable):,} already sent according to {short(P.journal)}).")
-    out(f"Gas     budget {a.budget_bnb:g} BNB of fees for {short(P.journal)}; earlier runs used "
-        f"{(fees0 + reserved0) / 1e18:.6f}, so up to {left / 1e18:.6f} BNB for this run.")
+    out(f"Gas     budget {a.budget_bnb:g} BNB of fees in total for {short(P.journal)} (every run that used it, not per "
+        f"day);")
+    out(f"        earlier runs used {(fees0 + reserved0) / 1e18:.6f}, so up to {left / 1e18:.6f} BNB for this run.")
     out(f"        Keep reserve {a.keep_bnb:g} BNB: the run stops before the wallet's BNB would fall below it.")
     for i, x in enumerate(sell_text(a)):
         out(("Sell    " if i == 0 else "        ") + x)
     if a.sell != "off":
         out("        On day 1 the price fell about 51% in the 14 minutes after the opening. Profit is not guaranteed.")
+    for i, x in enumerate(warnings):
+        out(("Check   " if i == 0 else "        ") + x)
     out("\nTyping yes approves this plan in advance: the mining transactions" +
         (" and the sales" if a.sell != "off" else "") + " go out through baw without asking you again.")
     out("Binance's external-sign flow expects you to confirm what is sent; this is that confirmation.")

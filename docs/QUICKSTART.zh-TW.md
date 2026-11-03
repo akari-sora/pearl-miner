@@ -94,7 +94,8 @@ Day     2: opens 2026-11-04 11:08:54 UTC = 2026-11-04 19:08:54 local, in 6 min 3
         The run waits for the opening, then stops when the day's cap is full, the gas budget is spent,
         90 minutes after the opening, or when submit/STOP exists.
 Proofs  9,600 usable (10,000 in submit/proofs.json, 400 already sent according to submit/journal.jsonl).
-Gas     budget 0.045 BNB of fees for submit/journal.jsonl; earlier runs used 0.000600, so up to 0.044400 BNB for this run.
+Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run that used it, not per day);
+        earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
 Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
         Sells 80% of the coins THIS run mines; the other 20% and every coin you held before the run stay in the wallet.
@@ -104,7 +105,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 |---|---|
 | Day | 要等哪一天開放，以及開放時間（UTC 與你的當地時間）。 |
 | Proofs | 還能用的 proof 數量。之前已送過的會自動跳過。 |
-| Gas | 這次最多能花多少 gas。上限涵蓋同一份 journal 的所有執行，所以計畫會列出今天還剩多少。 |
+| Gas | 這次最多能花多少 gas。上限是同一份 journal 所有執行的累計，所以計畫會列出今天還剩多少（見下方）。 |
 | Keep reserve | 永遠留在錢包裡的 BNB。 |
 | Sell | 挖完之後做什麼。只賣這次挖到的幣，而且只賣列出的比例。 |
 
@@ -125,6 +126,15 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | `--minutes M` | `90` | 開放後幾分鐘停止。 |
 | `--plan` | | 跑 `check` 並列出計畫後就結束，不送出任何東西。 |
 | `--yes` | | 不問就開始。只在計畫是你自己事先決定的時候使用。 |
+
+### gas 上限是跨天累計的
+
+`--budget-bnb` 是 `submit/journal.jsonl` 從頭到現在的累計上限，不是每天重新計算：所有用這份 journal 的執行都算在裡面。
+第 1 天花了約 0.0006 BNB，所以預設 0.045 到了第 2 天只剩 0.0444，計畫畫面會列出這個數字。想讓之後某一天有完整的額度，
+就把 `--budget-bnb` 加上之前已經花掉的量，例如第 2 天用 `--budget-bnb 0.0456`。
+
+同一批 proof 要一直沿用同一份 journal。換新的 journal 雖然會從 0 開始算，但它不知道哪些 proof 已經送過：這些 proof
+會被再試一次，每個含有它們的批次都會在開放時浪費一點時間才被剔除。只有搭配全新、從沒送過的 proof 時才換新的 journal。
 
 ### 結束時
 

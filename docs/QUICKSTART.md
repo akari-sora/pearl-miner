@@ -102,7 +102,8 @@ Day     2: opens 2026-11-04 11:08:54 UTC = 2026-11-04 19:08:54 local, in 6 min 3
         The run waits for the opening, then stops when the day's cap is full, the gas budget is spent,
         90 minutes after the opening, or when submit/STOP exists.
 Proofs  9,600 usable (10,000 in submit/proofs.json, 400 already sent according to submit/journal.jsonl).
-Gas     budget 0.045 BNB of fees for submit/journal.jsonl; earlier runs used 0.000600, so up to 0.044400 BNB for this run.
+Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run that used it, not per day);
+        earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
 Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
         Sells 80% of the coins THIS run mines; the other 20% and every coin you held before the run stay in the wallet.
@@ -112,7 +113,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 |---|---|
 | Day | Which day the run waits for, and when it opens in UTC and in your local time. |
 | Proofs | How many of your proofs can still be used. Proofs sent on an earlier day are skipped. |
-| Gas | The most gas the run may spend. The budget covers every run that uses the same journal, so the plan shows what is left for today. |
+| Gas | The most gas the run may spend. The budget is a total for every run that uses the same journal, so the plan shows what is left for today (see below). |
 | Keep reserve | BNB that always stays in the wallet. |
 | Sell | What happens after mining. Only coins mined by this run are sold, and only the fraction shown. |
 
@@ -134,6 +135,17 @@ confirmation. Anything other than `yes` cancels, and nothing is sent.
 | `--minutes M` | `90` | Stop this many minutes after the opening. |
 | `--plan` | | Run `check` and show the plan, then exit. Nothing is sent. |
 | `--yes` | | Skip the question. Use it only for a plan you decided yourself beforehand. |
+
+### The gas budget adds up over the days
+
+`--budget-bnb` is a running total for `submit/journal.jsonl`, not a new allowance each day: every run that uses
+the journal counts against it. Day 1 used about 0.0006 BNB, so with the default 0.045 there is 0.0444 left on day 2,
+and the plan shows that number. To give a later day the full amount, raise `--budget-bnb` by what earlier runs
+spent, for example `--budget-bnb 0.0456` on day 2.
+
+Keep the same journal for the same proofs. A new journal starts the count at zero, but it does not know which proofs
+were already sent: they are tried again, and each batch that holds one wastes a moment at the opening before it is
+dropped. Use a new journal only together with newly mined proofs that were never sent.
 
 ### When it ends
 

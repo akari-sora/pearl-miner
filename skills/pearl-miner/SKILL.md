@@ -94,7 +94,8 @@ If either one fails, stop, show the user the output and use the troubleshooting 
 Show the user the plan from step 3:
 - the day, with its opening time in UTC and local time;
 - the number of usable proofs;
-- the gas budget and the keep reserve;
+- the gas budget and the keep reserve. The budget is a running total for `submit/journal.jsonl`, not per day: to
+  give today X BNB, pass `--budget-bnb` = X + what earlier runs spent (the plan shows what is left);
 - the sell mode (`now`, `trail` or `off`) and the sell fraction (by default 80% of the coins this run mines;
   coins held before are never sold).
 
@@ -140,10 +141,10 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | `matches the wallet: False` | The handle is not this wallet's Agent ID. | Check both with the user. |
 | `wallet session: ... (must be CONNECTED)` | The `baw` session ended. | The user re-pairs in the Binance App. |
 | `baw wallet settings` fails, or Developer Mode is off | Developer Mode is off. | The user turns it on in the Binance App. |
-| `used=True` in check | Proofs used on an earlier day, but not in `submit/journal.jsonl`. | Copy the earlier run's `journal.jsonl` into `submit/`. |
+| `WARNING: N sampled proofs are already used on chain` | Proofs sent from another machine or with another journal. | run skips them, at a cost at the opening; better copy that run's `journal.jsonl` into `submit/`. |
 | `submit/STOP exists` | Left over from an earlier stop. | Ask the user, then delete it. |
 | `a run is already going` | `run.pid` names a live process. | `python3 pearl.py status`; if no run is going, delete `submit/run.pid` with the user's ok. |
-| `gas budget ... already used` | Earlier runs in the same journal used the budget. | The user decides on a higher `--budget-bnb`. |
+| `gas budget ... already used` | The budget is a total for the journal; earlier runs used it. | The user decides on a higher `--budget-bnb`. Keep the same journal. |
 | `requireConfirmation`, or a preview risk stop | The wallet wants approval in the Binance App, or flagged a risk. | Stop and tell the user. Never work around it. |
 | `InvalidSolution` (around day 4 or later) | The difficulty went up. | Filter the proofs; see `docs/CONTRACT.md`, "Difficulty stages". |
 | fork: port in use, or `anvil` not found | Another node, or Foundry missing. | Pass `--port`, or install Foundry. |

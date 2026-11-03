@@ -798,16 +798,60 @@ def cmd_check(a):
         say(f"no proofs file at {a.proofs} yet: identity and chain checks only")
     else:
         pr = load_proofs(a.proofs)
-        for _, proof in pr[:: max(1, len(pr) // 5)][:5]:
-            used = proof_used(proof)
-            say(f"proof {proof[:18]}… used={used}")
-            ok &= not used
-        kind, sel = simulate(batch_calldata(pr[:MAX_BATCH]))
-        say(f"eth_call mineBatch({min(MAX_BATCH, len(pr))}) from wallet now: {kind} {ERRORS.get(sel, sel)}"
-            " (DailyLimitReached before the day opens means identity and proofs pass)")
-        ok &= (kind == "revert" and sel == DAILY_LIMIT) or kind == "ok"
-        say(f"proofs file: {len(pr)} unique proofs")
+        jpath = getattr(a, "journal", None) or os.path.join(HERE, "journal.jsonl")
+        blocked = blocked_from_journal(read_journal(jpath))[0]  # the rule run uses: sent proofs are skipped
+        unsent = [x for x in pr if x[1] not in blocked]
+        say(f"proofs file: {len(pr)} unique proofs; {len(pr) - len(unsent)} already sent according to {jpath}")
+        if not unsent:
+            say("no proof is left that has not been sent: mine new ones")
+            ok = False
+        else:
+            used = {}  # proof -> used on chain: used but not in the journal means sent from elsewhere; run drops it
+            for _, proof in unsent[:: max(1, len(unsent) // 5)][:5]:
+                used[proof] = proof_used(proof)
+                say(f"proof {proof[:18]}… used={used[proof]}")
+            start = 0  # simulate batches of 16 in run's order until one holds no proof used elsewhere
+            batch = unsent[:MAX_BATCH]
+            kind, sel = simulate(batch_calldata(batch))
+            while kind == "revert" and sel == PROOF_USED and start + MAX_BATCH < min(len(unsent), CHECK_SCAN):
+                start += MAX_BATCH
+                batch = unsent[start:start + MAX_BATCH]
+                kind, sel = simulate(batch_calldata(batch))
+            if kind == "revert" and sel == PROOF_USED:
+                say(f"every batch in the first {min(len(unsent), CHECK_SCAN)} proofs not in the journal holds a proof "
+                    "used on chain: copy the journal of the run that sent them here (or pass --journal)")
+                ok, batch = False, []
+            n_used = sum(used.values())
+            if n_used:
+                say(f"WARNING: {n_used} sampled proofs are already used on chain and will be skipped by run")
+            if start:
+                say(f"WARNING: the first {start} proofs not in the journal hold proofs used on chain; run skips them")
+            if n_used or start:
+                say("  (each batch holding one costs run a preview at the opening; if they were sent from another "
+                    "machine or with another journal, use that journal here)")
+            if batch:
+                say(f"eth_call mineBatch({len(batch)}) from wallet now: {kind} {ERRORS.get(sel, sel)}"
+                    " (DailyLimitReached before the day opens means identity and proofs pass)")
+                ok &= (kind == "revert" and sel == DAILY_LIMIT) or kind == "ok"
     say("CHECK", "OK" if ok else "HAS PROBLEMS")
+
+
+CHECK_SCAN = 1024  # check simulates at most this many proofs (64 batches) to get past proofs used elsewhere
+
+
+def read_journal(path):
+    """The journal's records, read only: check never creates, opens for writing or locks a journal."""
+    recs = []
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict):
+                    recs.append(r)
+    return recs
 
 
 # ---------------------------------------------------------------- rehearse

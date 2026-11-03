@@ -49,6 +49,8 @@ if cmd == "check":
         print("12:00:00.300 CHECK HAS PROBLEMS")
     else:
         print("12:00:00.100 registry ownerOf(agentId) = 0x...; matches the wallet: True")
+        if os.environ.get("FAKE_CHECK") == "warn":
+            print("12:00:00.200 WARNING: 3 sampled proofs are already used on chain and will be skipped by run")
         print("12:00:00.300 CHECK OK")
     sys.exit(0)
 pid_seen = None
@@ -270,20 +272,31 @@ with open(os.path.join(e.data, "run.pid"), "w") as f:
 rc = e.run([])
 expect("a run already going: refused", rc == 1 and "already going" in e.err and not e.calls(), e.err)
 
+e = Env()
+rc = e.run(["--yes", "--sell", "off"], env={"FAKE_CHECK": "warn"})
+expect("a WARNING from check is shown in the plan and does not stop the run",
+       rc == 0 and "Check   WARNING: 3 sampled proofs are already used on chain" in e.out
+       and len(e.calls("submit")) == 2, (rc, e.err))
+
 print("---- journal: proofs sent before and the budget")
 att = {"ev": "attempt", "requestId": "r1", "proofs": ["0x%064x" % (i + 1) for i in range(16)]}
 bro = {"ev": "broadcast", "requestId": "r1", "tx": "0x" + "ab" * 32, "proofs": att["proofs"]}
 rcp = {"ev": "receipt", "tx": "0x" + "ab" * 32, "status": 1, "fee": 10 ** 15, "mined": 16}
 e = Env(journal=[att, bro, rcp])
 rc = e.run(["--sell", "off"])
-expect("check reads only proofs not sent before", rc == 0 and e.calls("submit")[0]["proofs_seen"] == 24,
-       e.calls("submit"))
+cargv = e.calls("submit")[0]["argv"]
+expect("check gets proofs.json and the journal (it skips sent proofs itself, like run)",
+       rc == 0 and cargv[cargv.index("--proofs") + 1] == os.path.join(e.data, "proofs.json")
+       and cargv[cargv.index("--journal") + 1] == os.path.join(e.data, "journal.jsonl"), cargv)
 expect("plan counts them", "24 usable (40 in" in e.out and "16 already sent" in e.out, e.out)
-expect("the check copy is removed", not os.path.exists(os.path.join(e.data, "proofs.check.json")))
+expect("no temporary proofs copy is left", sorted(os.listdir(e.data)) == ["journal.jsonl", "proofs.json", "run.log",
+                                                                           "run.pid"], os.listdir(e.data))
 expect("the run still gets the full proofs.json (its journal blocks what was sent)",
        e.calls("submit")[1]["argv"][e.calls("submit")[1]["argv"].index("--proofs") + 1]
        == os.path.join(e.data, "proofs.json"))
 expect("fees from earlier runs are shown", "earlier runs used 0.001000" in e.out, e.out)
+expect("the plan says the budget counts every run of the journal", "in total for" in e.out
+       and "not per" in e.out, e.out)
 expect("summary: this run's fees only", "gas about 0.001300 BNB" in e.out, e.out)
 e = Env(journal=[att, bro, dict(rcp, fee=5 * 10 ** 16)])
 rc = e.run([])
