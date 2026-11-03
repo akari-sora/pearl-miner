@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Dress rehearsal of pearl_submit.py `run` against the REAL PearlMiningV2 on a local anvil fork of BSC.
 
 Nothing touches the real chain or the real wallet:

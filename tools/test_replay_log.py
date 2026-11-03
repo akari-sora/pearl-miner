@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Offline checks for replay_log.py redaction. All values below are made up.
 
   python3 tools/test_replay_log.py

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Offline tests for pearl_submit.Runner with a fake baw and a fake chain.
 
   python3 test_submit.py

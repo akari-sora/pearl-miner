@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Sell a fraction of the wallet's 珍珠币 for BNB in chunks through `baw market-order` (Binance Web3 Wallet).
 
 Default policy: after the mining run has finished, sell 80% in chunks of about 100k coins,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """FAKE baw for the local anvil fork rehearsal. Talks ONLY to FAKEBAW_RPC (default http://127.0.0.1:8547).
 contract-call preview -> eth_call + eth_estimateGas on the fork (fails like baw: 351805 "execution reverted")
 contract-call execute -> eth_sendTransaction from the impersonated wallet on the fork

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Offline simulation of pearl_sell.py: fake baw + a constant-liquidity pool model calibrated on the
 PancakeSwap Infinity pool (evening of 2026-11-03: L = 7.06e17, 431,426 coins per BNB, fee 0.3726%)."""
 import json, math, os, sys, tempfile, time

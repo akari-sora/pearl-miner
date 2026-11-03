@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """GPU proof search for PearlMiningV2 (BSC 0x7E2DA878217EB995F9e5d36eD32c9Cea52442681).
 
 proof = keccak256(seed || nonce) with nonce as 32-byte big-endian; valid at stage 0 when the

@@ -4,7 +4,7 @@
 
 **用 GPU 預先挖好 PearlMiningV2（珍珠币）的 proof，在每日額度開放的那一秒，透過幣安 Agentic Wallet 送上 BSC；同一個 proof 絕不重送，gas 絕不超過你設的上限。**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB.svg)
 ![Submitter: stdlib only](https://img.shields.io/badge/submitter-stdlib%20only-2ea44f.svg)
 ![Chain: BSC](https://img.shields.io/badge/chain-BNB%20Smart%20Chain-F0B90B.svg)
@@ -41,7 +41,7 @@ proof（`keccak256(seed ‖ nonce)`，前 30 bits 為 0），再用 `mineBatch(a
 
 - **GPU 高速挖礦**：OpenCL 手動展開的 Keccak-f[1600]，RTX 4070 SUPER 約 2 GH/s（每秒約 1.9 個 stage 0 proof）。
   proof 綁錢包、不綁日期，可以提前挖好。
-- **開放時自動開始**：previewer 在換日前 0.6 秒開始；主網上第一筆交易在鏈上顯示新的一天後 2.5 秒送出。
+- **開放時自動開始**：previewer 在換日前 0.6 秒開始；主網上第一筆交易在開放後約 3 秒上鏈。
 - **流水線**：三個 previewer 持續準備好已模擬、已過風險檢查的交易，單一 executor 一筆接一筆送出，tracker 收收據，
   watcher 從同一個區塊讀取日期、剩餘額度與每個 proof 的獎勵。
 - **proof 絕不重送**：每次 `execute` 之前先把紀錄 fsync 寫進 journal；重啟時重放 journal。
@@ -185,11 +185,11 @@ python3 submit/pearl_sell.py run --mode now       # 立刻賣出 80%，每批最
 
 | | 第 0 天（2026-11-02） | 第 1 天（2026-11-03） |
 |---|---|---|
-| 從開放到 2,000 萬枚額度用完 | 70 分 36 秒 | **64 秒** |
+| 從開放到 2,000 萬枚額度用完（最後一筆成功領取的區塊） | 70 分 36 秒 | **約 59 秒** |
 
 這個工具在第 1 天用**單一錢包**做到的（就是上面的重播）：
 
-- 13 筆交易，**挖到 192 個 proof**（每個約 95 枚），第一筆在鏈上顯示新的一天後 2.5 秒送出；
+- 13 筆交易，**挖到 192 個 proof**（每個約 95 枚），第一筆在開放後約 3 秒上鏈；
 - 1 筆 revert：最後一筆在額度剛好用完時送出（花費約 0.000006 BNB）；
 - gas 合計**約 0.0006 BNB**；
 - 每 4 到 5 秒一筆，也就是「每個地址同時只能有一筆進行中的交易」的上限。
@@ -282,6 +282,8 @@ BNB Chain 及該代幣團隊**皆無任何關係**。「Binance」、「PancakeS
 
 ## 授權
 
-[MIT](LICENSE) © 2026 Akari Sora
+[GNU AGPL-3.0-or-later](LICENSE) © 2026 Akari Sora
+
+白話說：你可以自由使用、研究、修改和分享。但如果你散布修改過的版本，或把修改版架成網路服務給別人用，就必須用同樣的授權公開你的原始碼。
 
 Canonical repo, issues and releases: https://gitlab.com/aa22396584/pearl-miner

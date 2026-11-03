@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Replay a pearl_submit.py run log in (scaled) real time, with identifying values redacted.
 
 The pause before each line is the original gap between the two lines, divided by --speed. Gaps longer than

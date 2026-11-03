@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Build submit/proofs.json from the GPU miner's proofs.csv, re-verifying every proof.
 
   python3 export_proofs.py <proofs.csv> [--wallet 0x...] [--out proofs.json]

@@ -4,7 +4,7 @@
 
 **Mine PearlMiningV2 (珍珠币) proofs on your GPU, then claim them on BSC the second the daily window opens, through a Binance Agentic Wallet, without ever sending a proof twice or spending more gas than you allowed.**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB.svg)
 ![Submitter: stdlib only](https://img.shields.io/badge/submitter-stdlib%20only-2ea44f.svg)
 ![Chain: BSC](https://img.shields.io/badge/chain-BNB%20Smart%20Chain-F0B90B.svg)
@@ -44,7 +44,7 @@ This repository is the complete toolchain that ran on mainnet:
 - **Fast GPU mining**: hand-unrolled Keccak-f[1600] in OpenCL, about 2 GH/s (≈ 1.9 stage-0 proofs per second) on an
   RTX 4070 SUPER. Proofs are bound to your wallet, not to a day, so you mine ahead of time.
 - **Starts on its own at the opening**: previewers begin 0.6 s before the boundary; on mainnet the first
-  transaction was broadcast 2.5 s after the chain showed the new day.
+  transaction was mined about 3 s after the opening.
 - **Pipelined**: three previewers keep simulated, risk-screened transactions ready, one executor sends them back to
   back, a tracker collects receipts, a watcher reads day, remaining cap and reward from a single block.
 - **Never sends a proof twice**: an fsynced journal entry precedes every `execute`; a restart replays the journal.
@@ -193,12 +193,12 @@ These are honest numbers from mainnet, not a promise.
 
 | | Day 0 (2026-11-02) | Day 1 (2026-11-03) |
 |---|---|---|
-| Time from the opening until the 20M cap was full | 70 min 36 s | **64 s** |
+| Time from the opening until the 20M cap was full (block of the last successful claim) | 70 min 36 s | **about 59 s** |
 
 What this tool did with **one wallet** on day 1 (the replay above):
 
-- 13 transactions, **192 proofs mined** (about 95 coins each), the first one broadcast 2.5 s after the chain
-  showed the new day;
+- 13 transactions, **192 proofs mined** (about 95 coins each), the first one mined about 3 s after the
+  opening;
 - 1 revert: the last transaction, sent as the cap filled (it cost about 0.000006 BNB);
 - **about 0.0006 BNB** gas in total;
 - one transaction every 4 to 5 seconds, the limit of one in-flight transaction per address.
@@ -302,6 +302,8 @@ PancakeSwap, BNB Chain or the token's team. "Binance", "PancakeSwap" and "BNB" a
 
 ## License
 
-[MIT](LICENSE) © 2026 Akari Sora
+[GNU AGPL-3.0-or-later](LICENSE) © 2026 Akari Sora
+
+In short: you may use, study, modify and share it. If you distribute a modified version, or run one as a network service for others, you must publish your source under the same license.
 
 Canonical repo, issues and releases: https://gitlab.com/aa22396584/pearl-miner

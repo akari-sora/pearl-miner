@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Akari Sora
 // PearlMiningV2 proof search: keccak256(seed[32] || nonce[32, big-endian]) with the top 30 bits zero.
 // nonce = prefix (24 random bytes, fixed per run) || counter (8 bytes, big-endian).
 // Lanes are little-endian 64-bit words of the 136-byte Keccak-256 rate block.

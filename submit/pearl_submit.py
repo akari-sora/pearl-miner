@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Akari Sora
 """Submit precomputed PearlMiningV2 proofs through the Binance Agentic Wallet CLI (baw).
 
 Standard library only. Needs `baw` on PATH, already signed in, Developer Mode on.
