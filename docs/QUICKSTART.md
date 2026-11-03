@@ -1,0 +1,173 @@
+# Quick start: one command a day
+
+English · [繁體中文](QUICKSTART.zh-TW.md)
+
+`python3 pearl.py auto` does the whole day for you: it checks your setup, shows you the plan, waits for you to type
+`yes`, waits for the opening, mines, and then sells part of what it mined. This page is for people who do not write
+code. On Windows, type `python` (or `py`) wherever this page says `python3`; setup and other differences per
+system are in [PLATFORMS.md](PLATFORMS.md).
+
+> **Read this first: the risks**
+>
+> - **Profit is small and not guaranteed.** Competition is intense: on day 1 the whole daily cap was gone in about
+>   a minute, and this tool's own wallet mined 192 proofs (about 95 coins each).
+> - **The price can fall fast.** On day 1 the price fell about 51% in the 14 minutes after the opening. The coin
+>   trades in a single pool and can fall to nothing.
+> - **Automation may break the wallet's terms.** Driving a wallet with scripts may get the account limited. Typing
+>   `yes` is *your* approval of the plan; it does not mean Binance approves unattended use.
+> - Gas and electricity are on you. Use only money you can afford to lose. Read the
+>   [disclaimer](../README.md#disclaimer).
+
+## What you need
+
+- A Binance **Agent ID** and its **Agentic Wallet**, with the `baw` CLI installed, signed in, and Developer Mode
+  on. There is no private key or seed phrase to give anyone: the tools only talk to `baw`.
+- About 0.05 BNB in that wallet. The defaults allow at most 0.045 BNB of gas and always keep 0.005 BNB; day 1
+  used about 0.0006 BNB of gas.
+- Python 3.9 or newer.
+- For mining: a GPU with OpenCL, and `pip install -r miner/requirements.txt`.
+- For the free rehearsal: `anvil` from [Foundry](https://getfoundry.sh).
+
+Get the code and tell it your wallet address and your Agent ID handle (lower-case letters and digits, without
+`.ai`). Neither is a secret.
+
+macOS / Linux:
+
+```sh
+git clone https://gitlab.com/aa22396584/pearl-miner.git && cd pearl-miner
+export PEARL_WALLET=0xYourAgenticWalletAddress
+export PEARL_HANDLE=yourhandle
+```
+
+Windows (PowerShell):
+
+```powershell
+git clone https://gitlab.com/aa22396584/pearl-miner.git; cd pearl-miner
+$env:PEARL_WALLET = "0xYourAgenticWalletAddress"
+$env:PEARL_HANDLE = "yourhandle"
+```
+
+Set the two variables again in every new terminal window.
+
+## Three steps
+
+### 1. Mine (any time before the opening)
+
+```sh
+pip install -r miner/requirements.txt
+python3 miner/miner.py --out miner/proofs.csv
+```
+
+The miner runs until you stop it. To stop it, create a file named `STOP` in the `miner` folder:
+`touch miner/STOP` (Windows: `New-Item -ItemType File miner\STOP`). Delete that file before you mine again. Proofs keep until they are
+used, so you can mine over several days; but once 90M coins have been mined (around day 4) the difficulty rises and
+about a third of older proofs stop qualifying (see [CONTRACT.md](CONTRACT.md#difficulty-stages)).
+
+### 2. Rehearse for free on a local copy of the chain
+
+```sh
+python3 submit/export_proofs.py miner/proofs.csv
+python3 submit/fork_rehearsal/run_fork.py --autopilot
+```
+
+The first line checks every proof again and writes `submit/proofs.json`. The second copies the real contract into
+a local test chain on your computer, opens the mining day about a minute later, and runs exactly what step 3 runs.
+The wallet in this rehearsal is a fake that can only talk to your own computer, so no transaction reaches the real
+chain and no BNB is spent. It must end with `FORK REHEARSAL: PASS`. Add `--anonymize` before you share the output.
+
+### 3. Run it on the day
+
+Every mining day opens at **11:08:54 UTC** (19:08:54 in Taipei, Beijing and Singapore). A few minutes before:
+
+```sh
+python3 pearl.py auto
+```
+
+It checks your setup, shows the plan, and waits for you to type `yes`. Then it waits for the opening, mines,
+and sells. Leave the window open until you see the summary.
+
+- To stop early, create `submit/STOP` (`touch submit/STOP`; Windows: `New-Item -ItemType File submit\STOP`) or press Ctrl-C. The
+  run finishes what is already in flight, and nothing is sold. Delete `submit/STOP` before the next start.
+- To see what is going on from another window: `python3 pearl.py status`.
+- To see the plan without starting anything: `python3 pearl.py auto --plan`.
+
+## The confirmation screen
+
+Before anything is sent, `pearl.py auto` runs the read-only `check` and prints a plan like this:
+
+```text
+==== the plan ====
+Wallet  0x12345678…, Agent ID keccak256('yourhandle')
+Day     2: opens 2026-11-04 11:08:54 UTC = 2026-11-04 19:08:54 local, in 6 min 3 s.
+        The run waits for the opening, then stops when the day's cap is full, the gas budget is spent,
+        90 minutes after the opening, or when submit/STOP exists.
+Proofs  9,600 usable (10,000 in submit/proofs.json, 400 already sent according to submit/journal.jsonl).
+Gas     budget 0.045 BNB of fees for submit/journal.jsonl; earlier runs used 0.000600, so up to 0.044400 BNB for this run.
+        Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
+Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
+        Sells 80% of the coins THIS run mines; the other 20% and every coin you held before the run stay in the wallet.
+```
+
+| Line | What it means |
+|---|---|
+| Day | Which day the run waits for, and when it opens in UTC and in your local time. |
+| Proofs | How many of your proofs can still be used. Proofs sent on an earlier day are skipped. |
+| Gas | The most gas the run may spend. The budget covers every run that uses the same journal, so the plan shows what is left for today. |
+| Keep reserve | BNB that always stays in the wallet. |
+| Sell | What happens after mining. Only coins mined by this run are sold, and only the fraction shown. |
+
+Typing `yes` approves this plan in advance: the mining transactions and the sales then go out through `baw`
+without asking you again. Binance's external-sign flow expects you to confirm what is sent, and this is that
+confirmation. Anything other than `yes` cancels, and nothing is sent.
+
+### Options and defaults
+
+| Option | Default | What it does |
+|---|---|---|
+| `--day N` | the next opening | Wait for day N instead. |
+| `--budget-bnb X` | `0.045` | Most gas in BNB for the journal, earlier runs included. |
+| `--keep-bnb X` | `0.005` | BNB that always stays in the wallet. |
+| `--sell now` | `now` | Sell right after the run ends. On day 1 the price fell fast after the opening. |
+| `--sell trail` | | Watch the price for up to 2 hours and sell on a 7% pullback from its high, or on schedule. |
+| `--sell off` | | Sell nothing. |
+| `--sell-fraction F` | `0.8` | Share of the coins mined by this run to sell. Coins you held before are never sold. |
+| `--minutes M` | `90` | Stop this many minutes after the opening. |
+| `--plan` | | Run `check` and show the plan, then exit. Nothing is sent. |
+| `--yes` | | Skip the question. Use it only for a plan you decided yourself beforehand. |
+
+### When it ends
+
+The summary shows the proofs mined, the gas spent, the coins sold and the BNB received, and where the logs are
+(`submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.jsonl`). The exit code says how it went:
+
+| Exit code | Meaning | What to do |
+|---|---|---|
+| 0 | Done. | Nothing. |
+| 1 | Refused before anything was sent. | Read the one-line reason, fix it, start again. |
+| 3 | The run did not end with a summary. | `python3 pearl.py status`, then start the same command again: the journal keeps any proof that may have been sent from being sent twice. |
+| 4 | Mining finished, but the sale was skipped or stopped. | Sell by hand when you are ready: `python3 submit/pearl_sell.py run --mode now --keep-coins N`, where N is the number of coins to keep. |
+
+## Hand it to your AI agent
+
+You can give this job to a coding agent such as Claude Code, Codex or Cursor. Copy the prompt below into your
+agent, in your own words if you like. The agent never needs a private key.
+
+```text
+Help me mine 珍珠币 (PearlMiningV2) with pearl-miner: https://gitlab.com/aa22396584/pearl-miner
+1. Clone the repository, read docs/QUICKSTART.md and the disclaimer in README.md, and follow them.
+2. Never ask for, read or store a private key, seed phrase or password. The wallet is my Binance Agentic Wallet,
+   used only through the `baw` CLI I signed in myself. If anything seems to need a key, stop and tell me.
+3. Set PEARL_WALLET and PEARL_HANDLE to the address and handle I give you.
+4. Run the free rehearsal `python3 submit/fork_rehearsal/run_fork.py --autopilot`. Stop and show me the output
+   unless it ends with FORK REHEARSAL: PASS.
+5. Run `python3 pearl.py auto --plan`: it runs the read-only check and prints the plan. Stop if check fails.
+   Show me the plan: day and time, gas budget, keep reserve, sell mode and sell fraction. Wait until I answer yes.
+6. After my yes, start it a few minutes before the opening so it survives your shell's time limit, for example
+   `echo yes | python3 pearl.py auto > submit/auto.log 2>&1` in the background, with the same options as the plan.
+   Never use --yes unless I wrote the strategy myself and told you to use it.
+7. Do not change the code, the defaults or the safety limits unless I ask.
+8. When it ends, report the summary: proofs mined, gas spent, coins sold, BNB received, the stop reason, and the
+   exit code. Use `python3 pearl.py status` to check on it.
+```
+
+中文版提示詞在 [QUICKSTART.zh-TW.md](QUICKSTART.zh-TW.md#交給你的-ai-agent)。

@@ -21,6 +21,10 @@ for the sender, so this needs YOUR wallet address, raw handle and proofs.json (s
 every hex value of 4+ digits (tx hashes, your address) masked, block numbers and unix times removed, BNB amounts
 rounded and the temp work dir hidden; the rules of tools/replay_log.py --anonymize. The day before the target is set
 full on the fork before the opening, so nothing can be mined early.
+
+--autopilot runs the one-command path instead, as you would on the day: `pearl.py auto --yes --sell off` with
+check and run as child processes (fork_submit.py points them at the fork). --journal copies an earlier
+journal.jsonl into the work dir, so proofs sent on earlier days are skipped as in a real later-day run.
 """
 import argparse
 import io
@@ -110,6 +114,10 @@ def main():
     ap.add_argument("--proofs", default=os.path.join(SUBMIT, "proofs.json"), help="your proofs.json (copied)")
     ap.add_argument("--day", type=int, default=None, help="day to open on the fork (default: the next one)")
     ap.add_argument("--port", default=PORT, help="local anvil port, must be free (env PEARL_FORK_PORT; default 8547)")
+    ap.add_argument("--autopilot", action="store_true",
+                    help="run `pearl.py auto --yes --sell off` (check + run as child processes) instead of the submitter")
+    ap.add_argument("--journal", default=None, help="an earlier journal.jsonl to copy in, so proofs sent before are "
+                    "skipped (with --autopilot: submit/journal.jsonl if it exists)")
     ap.add_argument("--anonymize", action="store_true",
                     help="for recordings: T± times, hashes and addresses masked, no block numbers or temp paths")
     a = ap.parse_args()
@@ -124,6 +132,8 @@ def main():
     except OSError:
         pass
     ps.configure(a.wallet, a.handle)
+    if a.autopilot and a.journal is None and os.path.exists(os.path.join(SUBMIT, "journal.jsonl")):
+        a.journal = os.path.join(SUBMIT, "journal.jsonl")  # as on the day: proofs sent before are skipped
     if not os.path.exists(a.proofs):
         raise SystemExit(f"no proofs file at {a.proofs}: mine and export first, or pass --proofs")
 
@@ -132,8 +142,11 @@ def main():
     if a.anonymize:
         red = Redactor(anonymize=True)
 
+        repo = os.path.dirname(SUBMIT)  # check prints "baw at <path>": the path can hold your user name
+
         def scrub(line):
             line = line.replace(work, "<work dir>").replace(os.path.realpath(work), "<work dir>")
+            line = line.replace(repo, "<repo>").replace(os.path.realpath(repo), "<repo>")
             line = re.sub(r"\bfork_block=\d+", "fork_block=…", line)
             return red(re.sub(r"\bunix \d{10}(?:\.\d+)?", "unix …", line))  # on the fork that is the clock now
         streams = [RedactedStream(sys.stdout, scrub), RedactedStream(sys.stderr, scrub)]
@@ -175,8 +188,9 @@ def main():
 
         # clocks: chain boundary B_c happens LEAD_IN seconds from now; the submitter is told the same instant
         b_chain = ps.START + 86400 * target
-        frpc("anvil_setTime", [b_chain - LEAD_IN])
-        b_wall = time.time() + LEAD_IN
+        lead = LEAD_IN + 30 if a.autopilot else LEAD_IN  # the autopilot runs check before the run starts
+        frpc("anvil_setTime", [b_chain - lead])
+        b_wall = time.time() + lead
         ps.START = b_wall - 86400 * target
         if a.anonymize:  # the submitter's log lines start with T±s from the opening instead of the clock
             ps.now = lambda: f"T{time.time() - b_wall:+.2f}s"
@@ -187,6 +201,12 @@ def main():
         proofs = os.path.join(work, "proofs.json")
         shutil.copy(a.proofs, proofs)
         journal = os.path.join(work, "journal.jsonl")
+        if a.journal:
+            shutil.copy(a.journal, journal)
+        j0 = ps.Journal(journal)  # creates it when no --journal was given
+        recs0 = j0.read()
+        j0.f.close()  # no open handle of ours while the submitter holds its SenderLock
+        blocked0, fees0 = ps.blocked_from_journal(recs0)[:2]
         bin_dir = os.path.join(HERE, "bin")
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
         os.environ["FAKEBAW_STATE"] = os.path.join(work, "fakebaw.json")
@@ -234,21 +254,33 @@ def main():
         th = threading.Thread(target=competitor, daemon=True)
         th.start()
 
-        sys.argv = ["pearl_submit.py", "run", "--day", str(target), "--proofs", proofs, "--journal", journal,
-                    "--minutes", str(a.minutes), "--stop-file", os.path.join(work, "STOP"),
-                    "--wallet", ps.WALLET, "--handle", ps.HANDLE]
         t0 = time.time()
         rc = 0
-        try:
-            ps.main()
-        except SystemExit as e:
-            rc = e.code or 0
+        if a.autopilot:  # the one-command path: pearl.py here, check and run as child processes on the fork
+            os.environ.update(PEARL_WALLET=ps.WALLET, PEARL_HANDLE=ps.HANDLE, PEARL_FORK_RPC=FORK_RPC,
+                              PEARL_FORK_START=repr(ps.START),
+                              PEARL_SUBMIT_SCRIPT=os.path.join(HERE, "fork_submit.py"))
+            if a.anonymize:
+                os.environ["PEARL_FORK_T0"] = repr(b_wall)
+            sys.path.insert(0, os.path.dirname(SUBMIT))
+            import pearl
+            rc = pearl.main(["auto", "--yes", "--sell", "off", "--day", str(target), "--minutes", str(a.minutes),
+                             "--dir", work])
+        else:
+            sys.argv = ["pearl_submit.py", "run", "--day", str(target), "--proofs", proofs, "--journal", journal,
+                        "--minutes", str(a.minutes), "--stop-file", os.path.join(work, "STOP"),
+                        "--wallet", ps.WALLET, "--handle", ps.HANDLE]
+            try:
+                ps.main()
+            except SystemExit as e:
+                rc = e.code or 0
         stop_comp.set()
         dt = time.time() - t0
 
         # verify against the fork
         recs = ps.Journal(journal).read()
         b, fees, reserved, open_, used = ps.blocked_from_journal(recs)
+        recs = recs[len(recs0):]  # this run's records only (the rest came with --journal)
         txs = [r for r in recs if r.get("ev") == "broadcast"]
         rcpts = {r["tx"]: r for r in recs if r.get("ev") == "receipt"}
         ok_txs = [t for t in txs if rcpts.get(t["tx"], {}).get("status") == 1]
@@ -262,17 +294,27 @@ def main():
               f"no_receipt={sum(1 for t in txs if t['tx'] not in rcpts)}")
         print(f"proofs in ok txs={len(sent_proofs)}; marked used on chain={onchain_used}")
         print(f"competitor ate {comp['eaten']} proofs; chain now day={day} remaining={rem / 1e8:.2f} reward={rew / 1e8:.2f}")
-        print(f"journal replay: blocked={len(b)} fees={fees / 1e18:.6f} BNB reserved={reserved} open={list(open_)} used={len(used)}")
+        print(f"journal replay: blocked={len(b)} fees={fees / 1e18:.6f} BNB (earlier runs {fees0 / 1e18:.6f}) "
+              f"reserved={reserved} open={list(open_)} used={len(used)}")
         print(f"balance on fork: {0.0499:.6f} -> {bal_after / 1e18:.6f} BNB (spent {0.0499 - bal_after / 1e18:.6f})")
         stops = [r.get("reason") for r in recs if r.get("ev") == "stop"]
         print(f"stop reason: {stops}")
         checks = {
             "all ok-tx proofs used on chain": onchain_used == len(sent_proofs),
             "replay: nothing reserved or open": reserved == 0 and not open_,
-            "fees match spend": abs(fees / 1e18 - (0.0499 - bal_after / 1e18)) < 1e-9,
+            "fees match spend": abs((fees - fees0) / 1e18 - (0.0499 - bal_after / 1e18)) < 1e-9,
             "stopped for cap full": any("budget full" in (s or "") for s in stops),
             "sent something": len(ok_txs) > 0,
         }
+        if a.journal:
+            checks["no proof from the earlier journal sent again"] = not blocked0 & set(sent_proofs)
+        if a.autopilot:  # exit 0 also means check printed CHECK OK: pearl.py refuses to start the run otherwise
+            log = open(os.path.join(work, "run.log"), encoding="utf-8", errors="replace").read()
+            pid_file = os.path.join(work, "run.pid")
+            checks["autopilot: pearl.py exit 0 (check OK, run ended with SUMMARY)"] = rc == 0
+            checks["autopilot: run.log has the run's SUMMARY"] = "SUMMARY txs=" in log
+            checks["autopilot: run.pid names the run, now finished"] = (pearl.read_pid(pid_file) is not None
+                                                                         and not pearl.run_alive(pid_file))
         for k, v in checks.items():
             print(f"  [{'PASS' if v else 'FAIL'}] {k}")
         print("FORK REHEARSAL:", "PASS" if all(checks.values()) else "FAIL")
