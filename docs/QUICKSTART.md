@@ -71,9 +71,11 @@ python3 submit/fork_rehearsal/run_fork.py --autopilot
 ```
 
 The first line checks every proof again and writes `submit/proofs.json`. The second copies the real contract into
-a local test chain on your computer, opens the mining day about a minute later, and runs exactly what step 3 runs.
-The wallet in this rehearsal is a fake that can only talk to your own computer, so no transaction reaches the real
-chain and no BNB is spent. It must end with `FORK REHEARSAL: PASS`. Add `--anonymize` before you share the output.
+a local test chain on your computer, opens the mining day about a minute later, and runs step 3's check and mining
+(`pearl.py auto --sell off`: the local chain has no market to sell on, so the sale is covered only by the offline
+tests). The wallet in this rehearsal is a fake that can only talk to your own computer, so no transaction reaches
+the real chain and no BNB is spent. It must end with `FORK REHEARSAL: PASS`. Add `--anonymize` before you share the
+output.
 
 ### 3. Run it on the day
 
@@ -83,11 +85,16 @@ Every mining day opens at **11:08:54 UTC** (19:08:54 in Taipei, Beijing and Sing
 python3 pearl.py auto
 ```
 
-It checks your setup, shows the plan, and waits for you to type `yes`. Then it waits for the opening, mines,
-and sells. Leave the window open until you see the summary.
+It checks your setup, shows the plan, and waits for you to type `yes`. Then it waits for the opening and mines.
+When the run ends normally (the day's cap is full, the gas budget is spent, the proofs are used up or the time is
+over) it sells as planned; after STOP, Ctrl-C, a crash, a risk warning or any other error it sells nothing.
+Leave the window open until you see the summary.
 
-- To stop early, create `submit/STOP` (`touch submit/STOP`; Windows: `New-Item -ItemType File submit\STOP`) or press Ctrl-C. The
-  run finishes what is already in flight, and nothing is sold. Delete `submit/STOP` before the next start.
+- To stop early, create `submit/STOP` (`touch submit/STOP`; Windows: `New-Item -ItemType File submit\STOP`) or press
+  Ctrl-C. The run finishes what is already in flight, and nothing is sold. Delete `submit/STOP` before the next start.
+- Closing the window: on macOS and Linux the run goes on in the background without the sale; on Windows it ends the
+  run. To keep a run going without a window on Windows, start it as in "Run the submitter in the background" in
+  [PLATFORMS.md](PLATFORMS.md).
 - To see what is going on from another window: `python3 pearl.py status`.
 - To see the plan without starting anything: `python3 pearl.py auto --plan`.
 
@@ -106,7 +113,9 @@ Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run th
         earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
 Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
-        Sells 80% of the coins THIS run mines; the other 20% and every coin you held before the run stay in the wallet.
+        Sells at most 80% of the coins THIS run mines (never more than its proofs can have earned); the rest and every coin you held before the run stay in the wallet.
+        Only after a normal end (cap full, budget spent, proofs used up, deadline): never after STOP, Ctrl-C,
+        a crash, a risk warning or an error.
 ```
 
 | Line | What it means |
@@ -115,17 +124,18 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | Proofs | How many of your proofs can still be used. Proofs sent on an earlier day are skipped. |
 | Gas | The most gas the run may spend. The budget is a total for every run that uses the same journal, so the plan shows what is left for today (see below). |
 | Keep reserve | BNB that always stays in the wallet. |
-| Sell | What happens after mining. Only coins mined by this run are sold, and only the fraction shown. |
+| Sell | What happens after mining, and only after a normal end. Only coins mined by this run are sold, at most the fraction shown, and never more than the proofs mined can have earned, so coins that arrive from elsewhere meanwhile are not sold. |
 
 Typing `yes` approves this plan in advance: the mining transactions and the sales then go out through `baw`
-without asking you again. Binance's external-sign flow expects you to confirm what is sent, and this is that
-confirmation. Anything other than `yes` cancels, and nothing is sent.
+without asking you again. This is your advance approval of this plan, not the Binance App's confirmation of each
+transaction; whether Binance accepts it is up to Binance. It does not mean Binance approves unattended use, and
+driving a wallet with scripts may break its terms. Anything other than `yes` cancels, and nothing is sent.
 
 ### Options and defaults
 
 | Option | Default | What it does |
 |---|---|---|
-| `--day N` | the next opening | Wait for day N instead. |
+| `--day N` | the next opening | Wait for day N instead. Required when the answer does not come from a terminal (an agent piping `yes`), so the yes cannot apply to a later day. |
 | `--budget-bnb X` | `0.045` | Most gas in BNB for the journal, earlier runs included. |
 | `--keep-bnb X` | `0.005` | BNB that always stays in the wallet. |
 | `--sell now` | `now` | Sell right after the run ends. On day 1 the price fell fast after the opening. |
@@ -134,7 +144,8 @@ confirmation. Anything other than `yes` cancels, and nothing is sent.
 | `--sell-fraction F` | `0.8` | Share of the coins mined by this run to sell. Coins you held before are never sold. |
 | `--minutes M` | `90` | Stop this many minutes after the opening. |
 | `--plan` | | Run `check` and show the plan, then exit. Nothing is sent. |
-| `--yes` | | Skip the question. Use it only for a plan you decided yourself beforehand. |
+| `--yes` | | Skip the question. Use it only for a plan you decided yourself beforehand. Refused when check printed a WARNING. |
+| `--allow-used-elsewhere` | | Let `--yes` start although check warned about proofs already used on chain but not in the journal (a lost journal, or another machine sending). |
 
 ### The gas budget adds up over the days
 
@@ -156,8 +167,8 @@ The summary shows the proofs mined, the gas spent, the coins sold and the BNB re
 |---|---|---|
 | 0 | Done. | Nothing. |
 | 1 | Refused before anything was sent. | Read the one-line reason, fix it, start again. |
-| 3 | The run did not end with a summary. | `python3 pearl.py status`, then start the same command again: the journal keeps any proof that may have been sent from being sent twice. |
-| 4 | Mining finished, but the sale was skipped or stopped. | Sell by hand when you are ready: `python3 submit/pearl_sell.py run --mode now --keep-coins N`, where N is the number of coins to keep. |
+| 3 | The run did not end cleanly: no summary, or an error after it. | `python3 pearl.py status`. If that day's window is still open, start again with `--day N` (the day shown in the plan): the journal keeps any proof that may have been sent from being sent twice. |
+| 4 | The run ended, but the sale was skipped or stopped (STOP, Ctrl-C, a run that did not end normally, a balance that could not be read). | The message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` already filled in. Run it when you are ready. |
 
 ## Check the code yourself (optional)
 
@@ -186,13 +197,17 @@ Help me mine 珍珠币 (PearlMiningV2) with pearl-miner: https://gitlab.com/aa22
 4. Run the free rehearsal `python3 submit/fork_rehearsal/run_fork.py --autopilot`. Stop and show me the output
    unless it ends with FORK REHEARSAL: PASS.
 5. Run `python3 pearl.py auto --plan`: it runs the read-only check and prints the plan. Stop if check fails.
-   Show me the plan: day and time, gas budget, keep reserve, sell mode and sell fraction. Wait until I answer yes.
-6. After my yes, start it a few minutes before the opening so it survives your shell's time limit, for example
-   `echo yes | python3 pearl.py auto --day N > submit/auto.log 2>&1` in the background (N is the day the plan showed), with the same options as the plan; if that day's opening has passed, do not run it: show the user a new plan.
+   Show me the plan: day and time, gas budget, keep reserve, sell mode, sell fraction and any WARNING.
+   Wait until I answer yes.
+6. After my yes, start it a few minutes before the opening so it survives your shell's time limit, with the same
+   options as the plan and always the plan's --day N, for example
+   `echo yes | nohup python3 pearl.py auto --day N > submit/auto.log 2>&1 &`.
    Never use --yes unless I wrote the strategy myself and told you to use it.
-7. Do not change the code, the defaults or the safety limits unless I ask.
+7. To stop a run, create submit/STOP; never kill processes or delete journal.jsonl or run.pid. Do not change the
+   code, the defaults or the safety limits unless I ask.
 8. When it ends, report the summary: proofs mined, gas spent, coins sold, BNB received, the stop reason, and the
-   exit code. Use `python3 pearl.py status` to check on it.
+   exit code. Use `python3 pearl.py status` to check on it. If it ends with exit 3, ask me again before any rerun,
+   with the same --day N; if that day's window is over, do not rerun.
 ```
 
 中文版提示詞在 [QUICKSTART.zh-TW.md](QUICKSTART.zh-TW.md#交給你的-ai-agent)。

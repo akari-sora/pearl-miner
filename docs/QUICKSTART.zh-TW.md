@@ -65,8 +65,9 @@ python3 submit/fork_rehearsal/run_fork.py --autopilot
 ```
 
 第一行重新驗證每個 proof 並寫出 `submit/proofs.json`。第二行把真正的合約複製到你電腦上的測試鏈，約一分鐘後開放
-挖礦日，跑的正是第 3 步會跑的流程。預演用的錢包是假的，只能連到你自己的電腦，所以沒有任何交易會送到真正的鏈上，
-也不花任何 BNB。最後必須出現 `FORK REHEARSAL: PASS`。要分享輸出前，加上 `--anonymize`。
+挖礦日，跑第 3 步的 check 和送單（`pearl.py auto --sell off`：本機的鏈上沒有可以賣的市場，所以賣出只有離線測試涵蓋）。
+預演用的錢包是假的，只能連到你自己的電腦，所以沒有任何交易會送到真正的鏈上，也不花任何 BNB。最後必須出現
+`FORK REHEARSAL: PASS`。要分享輸出前，加上 `--anonymize`。
 
 ### 3. 當天執行
 
@@ -76,10 +77,13 @@ python3 submit/fork_rehearsal/run_fork.py --autopilot
 python3 pearl.py auto
 ```
 
-它會檢查設定、列出計畫、等你輸入 `yes`，然後等開放、送單、賣出。看到最後的總結之前，不要關掉視窗。
+它會檢查設定、列出計畫、等你輸入 `yes`，然後等開放、送單。送單正常結束時（當天額度滿、gas 預算用完、proof 用完或時間到）
+才照計畫賣出；遇到 STOP、Ctrl-C、程式出錯、風險警告或其他錯誤時，一律不賣。看到最後的總結之前，不要關掉視窗。
 
-- 想提早停：建立 `submit/STOP`（`touch submit/STOP`；Windows：`New-Item -ItemType File submit\STOP`）或按 Ctrl-C。已送出的交易
-  會處理完，不會賣出任何東西。下次啟動前刪掉 `submit/STOP`。
+- 想提早停：建立 `submit/STOP`（`touch submit/STOP`；Windows：`New-Item -ItemType File submit\STOP`）或按 Ctrl-C。
+  已送出的交易會處理完，不會賣出任何東西。下次啟動前刪掉 `submit/STOP`。
+- 關掉視窗：在 macOS 和 Linux 上送單會在背景繼續，但不會賣出；在 Windows 上會結束送單。在 Windows 上想不開視窗
+  繼續跑，請用 [PLATFORMS.zh-TW.md](PLATFORMS.zh-TW.md) 裡在背景執行送單程式的寫法。
 - 想在另一個視窗看進度：`python3 pearl.py status`。
 - 只想看計畫、不啟動任何東西：`python3 pearl.py auto --plan`。
 
@@ -98,7 +102,9 @@ Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run th
         earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
 Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
-        Sells 80% of the coins THIS run mines; the other 20% and every coin you held before the run stay in the wallet.
+        Sells at most 80% of the coins THIS run mines (never more than its proofs can have earned); the rest and every coin you held before the run stay in the wallet.
+        Only after a normal end (cap full, budget spent, proofs used up, deadline): never after STOP, Ctrl-C,
+        a crash, a risk warning or an error.
 ```
 
 | 項目 | 意思 |
@@ -107,16 +113,17 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | Proofs | 還能用的 proof 數量。之前已送過的會自動跳過。 |
 | Gas | 這次最多能花多少 gas。上限是同一份 journal 所有執行的累計，所以計畫會列出今天還剩多少（見下方）。 |
 | Keep reserve | 永遠留在錢包裡的 BNB。 |
-| Sell | 挖完之後做什麼。只賣這次挖到的幣，而且只賣列出的比例。 |
+| Sell | 挖完之後做什麼，而且只在正常結束時才賣。只賣這次挖到的幣，最多是列出的比例，也絕不超過這次的 proof 可能賺到的量，所以期間從別處轉入的幣不會被賣。 |
 
-輸入 `yes` 就是事先核准這份計畫：之後的送單交易與賣出都會透過 `baw` 送出，不會再問你。幣安的外部簽署流程預期由你確認
-送出的內容，這一步就是那個確認。輸入 `yes` 以外的任何內容都會取消，不送出任何東西。
+輸入 `yes` 就是事先核准這份計畫：之後的送單交易與賣出都會透過 `baw` 送出，不會再問你。這是你對本計畫的預先核准，
+不是 Binance App 內逐筆的確認；Binance 是否接受由 Binance 決定。這也不代表 Binance 同意無人值守的使用方式，用程式操作
+錢包可能違反它的條款。輸入 `yes` 以外的任何內容都會取消，不送出任何東西。
 
 ### 參數與預設值
 
 | 參數 | 預設 | 作用 |
 |---|---|---|
-| `--day N` | 下一次開放 | 改等第 N 天。 |
+| `--day N` | 下一次開放 | 改等第 N 天。回答不是從終端機輸入時（例如 agent 用管線送 `yes`）一定要帶，這樣 yes 就不會套用到之後的某一天。 |
 | `--budget-bnb X` | `0.045` | 這份 journal 最多花多少 BNB 的 gas，包含之前的執行。 |
 | `--keep-bnb X` | `0.005` | 永遠留在錢包裡的 BNB。 |
 | `--sell now` | `now` | 送單結束就賣。第 1 天開放後價格跌得很快。 |
@@ -125,7 +132,8 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | `--sell-fraction F` | `0.8` | 這次挖到的幣要賣掉的比例。之前就有的幣永遠不會賣。 |
 | `--minutes M` | `90` | 開放後幾分鐘停止。 |
 | `--plan` | | 跑 `check` 並列出計畫後就結束，不送出任何東西。 |
-| `--yes` | | 不問就開始。只在計畫是你自己事先決定的時候使用。 |
+| `--yes` | | 不問就開始。只在計畫是你自己事先決定的時候使用。check 印出 WARNING 時會被拒絕。 |
+| `--allow-used-elsewhere` | | check 警告有 proof 鏈上已用、但 journal 沒有紀錄時（journal 遺失，或另一台機器也在送），仍讓 `--yes` 開始。 |
 
 ### gas 上限是跨天累計的
 
@@ -145,8 +153,8 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 |---|---|---|
 | 0 | 完成。 | 不用做什麼。 |
 | 1 | 送出任何東西之前就拒絕了。 | 看那一行原因，修好後重新開始。 |
-| 3 | 送單沒有正常結束（沒有總結）。 | 先 `python3 pearl.py status`，再執行同一個指令：journal 會擋住可能已送出的 proof，不會重複送。 |
-| 4 | 挖礦結束了，但賣出被跳過或中途停止。 | 準備好時手動賣：`python3 submit/pearl_sell.py run --mode now --keep-coins N`，N 是要保留的幣數。 |
+| 3 | 送單沒有乾淨結束：沒有總結，或總結之後出錯。 | 先 `python3 pearl.py status`。如果那一天的時段還沒過，帶上計畫裡的 `--day N` 重新開始：journal 會擋住可能已送出的 proof，不會重複送。 |
+| 4 | 送單結束了，但賣出被跳過或中途停止（STOP、Ctrl-C、送單不是正常結束、讀不到餘額）。 | 訊息最後會印出之後補賣的指令，`--keep-coins` 和 `--max-sell-coins` 都已算好填上。準備好時執行它。 |
 
 ## 自己檢查程式（選用）
 
@@ -174,13 +182,15 @@ agent 完全不需要私鑰。要安裝 pearl-miner skill 或設定特定的 age
 4. 先跑免費預演 `python3 submit/fork_rehearsal/run_fork.py --autopilot`。除非最後是 FORK REHEARSAL: PASS，
    否則停下來把輸出給我看。
 5. 跑 `python3 pearl.py auto --plan`：它會跑唯讀的 check 並印出計畫，check 失敗就停下來。把計畫給我看：哪一天、幾點、
-   gas 上限、保留的 BNB、賣出模式和比例。等我回答 yes。
-6. 我說 yes 之後，在開放前幾分鐘啟動，並讓它不受你的 shell 時間限制，例如在背景執行
-   `echo yes | python3 pearl.py auto --day N > submit/auto.log 2>&1`（N 是計畫顯示的那一天），參數要和計畫一樣；那一天的開放時間已過就不要執行，重新給使用者看計畫。
+   gas 上限、保留的 BNB、賣出模式和比例，以及任何 WARNING。等我回答 yes。
+6. 我說 yes 之後，在開放前幾分鐘啟動，並讓它不受你的 shell 時間限制，參數要和計畫一樣，而且一定要帶計畫裡的
+   --day N，例如在背景執行 `echo yes | nohup python3 pearl.py auto --day N > submit/auto.log 2>&1 &`。
    除非策略是我自己寫的而且我叫你用，否則絕對不要用 --yes。
-7. 除非我要求，不要改程式碼、預設值或安全上限。
+7. 要停止送單就建立 submit/STOP；絕對不要砍程序，也不要刪 journal.jsonl 或 run.pid。除非我要求，不要改程式碼、
+   預設值或安全上限。
 8. 結束後回報總結：挖到的 proof、花掉的 gas、賣出的幣、換到的 BNB、停止原因和結束代碼。可以用
-   `python3 pearl.py status` 查看進度。
+   `python3 pearl.py status` 查看進度。如果以結束代碼 3 結束，重跑前要再問我，並帶同一個 --day N；
+   那一天的時段已過就不要重跑。
 ```
 
 English prompt: [QUICKSTART.md](QUICKSTART.md#hand-it-to-your-ai-agent).

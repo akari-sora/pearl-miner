@@ -32,10 +32,13 @@ yourself unless the user asks: `pearl.py` sets up `run.pid`, the logs and the am
 3. **Check and rehearse first.** Before a real run, `python3 pearl.py auto --plan` must show `CHECK OK` and the
    plan, and `python3 submit/fork_rehearsal/run_fork.py --autopilot` must end with `FORK REHEARSAL: PASS`.
    Otherwise stop and show the user the output.
-4. **The user decides.** Show the user the plan: day and opening time, gas budget, keep reserve, sell mode and
-   sell fraction. Run `pearl.py auto` only after an explicit "yes", with the same options, and answer its
-   question with that yes (for example `echo yes | python3 pearl.py auto ...`).
-5. **`--yes`** only when the user wrote the strategy themselves and told you to use it.
+4. **The user decides.** Show the user the plan: day and opening time, gas budget, keep reserve, sell mode, sell
+   fraction and any check `WARNING`. Run `pearl.py auto` only after an explicit "yes", with the same options and
+   always the plan's `--day N`, and answer its question with that yes (for example
+   `echo yes | nohup python3 pearl.py auto --day N ...`). pearl.py refuses a piped yes without `--day`. After
+   exit 3, ask again before any rerun; if that day's window is over, do not rerun.
+5. **`--yes`** only when the user wrote the strategy themselves and told you to use it. `--allow-used-elsewhere`
+   (needed with `--yes` after a check `WARNING`) only when the user decides so.
 6. **Stopping.** Create `submit/STOP` (the miner: `miner/STOP`). Do not kill processes to stop a run. Do not
    delete `journal.jsonl`, `run.pid` or a `STOP` file unless the user asks.
 7. **Settings.** Do not change defaults or limits (gas budget, keep reserve, sell fraction, minimum reward) on
@@ -53,7 +56,11 @@ yourself unless the user asks: `pearl.py` sets up `run.pid`, the logs and the am
     `launch_lock` and gate check before each `execute`, `Runner.stop` / `stopped`, the opening-grace rules
     (`after_sim_failure`, `confirm_backend_lag`), the budget and keep-reserve stops, and `--executors 1`;
   - in `pearl_sell.py`: the refusals on `run.pid`, on pending orders and on a wallet other than the signed-in one;
-  - in `pearl.py`: the `CHECK OK` gate, the `yes` confirmation, the `STOP` checks, and "no `SUMMARY` line, no sale".
+    `--max-sell-coins`; signals that only set a flag, so an order in flight is followed to its end;
+  - in `pearl.py`: the `CHECK OK` gate, the `yes` confirmation, the `--day` / `--allow-used-elsewhere` rules, the
+    `STOP`, `run.pid` and journal-lock checks right before the start, "no `SUMMARY` line, no sale", the list of
+    normal stop reasons after which a sale may follow (`CLEAN_STOP_RES`), and the sale cap (`sale_plan`: at most the
+    fraction of what the run's proofs can have earned).
 
 If one of these seems wrong, stop and explain it to the user instead of changing it.
 

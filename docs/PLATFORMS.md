@@ -18,14 +18,16 @@ differ between them, and what to do when something does not work.
 | Proof export `submit/export_proofs.py` | tested (manual run) | tested (manual run) | tested (manual run) |
 | Submitter `submit/pearl_submit.py` | tested (offline suite, fork simulation) | tested (offline suite) | tested (offline suite) |
 | Seller `submit/pearl_sell.py` | tested (offline suite) | tested (offline suite) | tested (offline suite) |
+| One command `pearl.py` | tested (offline suite with a real STOP and Ctrl-C; fork simulation with `--sell off`) | tested (offline suite with a real STOP and Ctrl-C) | tested (offline suite with a real STOP and CTRL_C_EVENT) |
 | Fork simulation `submit/fork_rehearsal/run_fork.py` | tested: `FORK REHEARSAL: PASS` | expected, untested | expected, untested |
 | Log replay `tools/replay_log.py` | redaction tested (offline suite); replay itself not run | redaction tested (offline suite) | redaction tested (offline suite) |
 
 "Manual run": `export_proofs.py` re-verified three proofs mined on the Mac, on each system; no automated test covers
-it. The offline suites (`submit/test_submit.py`, `submit/test_sell.py`, `tools/test_replay_log.py`,
-`miner/test_autotune.py`) start real processes,
-take the real journal lock and run a fake `baw` the way the real one is run (through `baw.cmd` on Windows). The real
-`baw` CLI and real transactions were not part of these tests on any system.
+it. Four offline suites (`submit/test_submit.py`, `submit/test_sell.py`, `tools/test_replay_log.py`,
+`tools/test_pearl_autopilot.py`) start real processes, take the real journal lock and run a fake `baw` the way the
+real one is run (through `baw.cmd` on Windows); `tools/test_pearl_autopilot.py` also sends pearl.py a real Ctrl-C.
+The fifth, `miner/test_autotune.py`, only checks the arithmetic of the miner's launch sizing: no process, no lock, no
+GPU. The real `baw` CLI and real transactions were not part of these tests on any system.
 
 Test machines: macOS 27 on an Apple M4 Max (Python 3.14); Ubuntu 24.04 with Linux 7.0 on a Ryzen 7 9700X
 (Python 3.12); Windows 11 on a Ryzen 9 9950X3D with an RTX 4070 SUPER (Python 3.11, NVIDIA driver 616.92).

@@ -96,28 +96,32 @@ Show the user the plan from step 3:
 - the number of usable proofs;
 - the gas budget and the keep reserve. The budget is a running total for `submit/journal.jsonl`, not per day: to
   give today X BNB, pass `--budget-bnb` = X + what earlier runs spent (the plan shows what is left);
-- the sell mode (`now`, `trail` or `off`) and the sell fraction (by default 80% of the coins this run mines;
-  coins held before are never sold).
+- the sell mode (`now`, `trail` or `off`) and the sell fraction (by default at most 80% of the coins this run
+  mines; coins held before are never sold);
+- any `WARNING` line from check. With one, `--yes` is refused unless `--allow-used-elsewhere` is added; add that
+  only if the user decides to.
 
 Ask whether to change any of it (`--sell`, `--sell-fraction`, `--budget-bnb`, `--keep-bnb`, `--day`). Wait for
 an explicit yes. Silence is not a yes, and neither is "sounds good, but...".
 
 ### 5. Run
 
-Start it a few minutes before 11:08:54 UTC, with the same options the user approved. Run it so that your shell's
-time limit cannot cut it off:
+Start it a few minutes before 11:08:54 UTC, with the same options the user approved and always with the plan's
+`--day N` (pearl.py refuses a piped yes without `--day`, so the yes can never apply to a later day). Run it so that
+your shell's time limit cannot cut it off:
 
 ```sh
 echo yes | nohup python3 pearl.py auto --day N [the approved options] > submit/auto.log 2>&1 &
-# N = the day the approved plan showed. If that opening has already passed, do not run: show the user a new plan.
 python3 pearl.py status            # any time: is it running, and the end of the logs
 ```
 
-On Windows, run `"yes" | python pearl.py auto [the approved options]` in a PowerShell window that stays open, or
-start it with your own background mechanism. Check on it with `python pearl.py status`.
+On Windows, run `"yes" | python pearl.py auto --day N [the approved options]` in a PowerShell window that stays
+open: closing that window ends the run. Check on it with `python pearl.py status`.
 
-The run waits for the opening. It stops when the day's cap is full, the gas budget is spent, 90 minutes after the
-opening, or when `submit/STOP` appears. Then it sells as planned.
+The run waits for the opening. It stops when the day's cap is full, the gas budget is spent, the proofs are used up,
+90 minutes after the opening, or when `submit/STOP` appears. Only after a normal end (cap full, budget spent, proofs
+used up, deadline) does it sell as planned, and never more than this run's proofs can have earned. After STOP,
+Ctrl-C, a crash, a risk warning or any other abnormal stop it sells nothing and exits 4.
 
 ### 6. Report
 
@@ -142,7 +146,9 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | `matches the wallet: False` | The handle is not this wallet's Agent ID. | Check both with the user. |
 | `wallet session: ... (must be CONNECTED)` | The `baw` session ended. | The user re-pairs in the Binance App. |
 | `baw wallet settings` fails, or Developer Mode is off | Developer Mode is off. | The user turns it on in the Binance App. |
-| `WARNING: N sampled proofs are already used on chain` | Proofs sent from another machine or with another journal. | run skips them, at a cost at the opening; better copy that run's `journal.jsonl` into `submit/`. |
+| `WARNING: N sampled proofs are already used on chain` | Proofs sent from another machine or with another journal. | run skips them, at a cost at the opening; better copy that run's `journal.jsonl` into `submit/`. `--yes` then needs `--allow-used-elsewhere`, only if the user decides so. |
+| `the answer does not come from a terminal: pass the --day` | A piped yes without `--day`. | Add the `--day N` from the plan the user approved. |
+| `another run holds submit/journal.jsonl` or `a run started meanwhile` | A submitter is already running. | `python3 pearl.py status`; tell the user. Never start a second one. |
 | `submit/STOP exists` | Left over from an earlier stop. | Ask the user, then delete it. |
 | `a run is already going` | `run.pid` names a live process. | `python3 pearl.py status`; if no run is going, delete `submit/run.pid` with the user's ok. |
 | `gas budget ... already used` | The budget is a total for the journal; earlier runs used it. | The user decides on a higher `--budget-bnb`. Keep the same journal. |
@@ -150,8 +156,8 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | `InvalidSolution` (around day 4 or later) | The difficulty went up. | Filter the proofs; see `docs/CONTRACT.md`, "Difficulty stages". |
 | fork: port in use, or `anvil` not found | Another node, or Foundry missing. | Pass `--port`, or install Foundry. |
 | `UNSAFE_ARG` | On Windows, a value for `baw` (a `.cmd` shim) that cmd.exe could misread; nothing was sent. | Stop and tell the user. Never work around it. |
-| exit 3 | The run ended without a summary. | `python3 pearl.py status`; then run the same command again. The journal never sends a proof twice. |
-| exit 4 | Mining finished; the sale was skipped or stopped. | Tell the user. Sell later only with their ok: `python3 submit/pearl_sell.py run --mode now --keep-coins N`. |
+| exit 3 | The run did not end cleanly: no summary, or an error after it. | `python3 pearl.py status`. Before any rerun, get the user's yes again and pass the same `--day N`; if that day's window is over, do not rerun. The journal never sends a proof twice. |
+| exit 4 | The run ended; the sale was skipped or stopped (STOP, Ctrl-C, an abnormal stop, a balance that did not read the same twice). | Tell the user. The message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in; run it only with their ok. |
 
 ## Offline tests (optional)
 

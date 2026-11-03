@@ -1002,16 +1002,18 @@ def main():
                                keep_bnb=0.005, minutes=0.5, previewers=2, executors=1, max_inflight=30, lead=0.6,
                                stagger=0.3, settle=1.5, stop_file=os.path.join(tmp5, "STOP"), min_reward=None)
     crashed = None
+    sigint_before = signal.signal(signal.SIGINT, signal.default_int_handler)  # a background shell may start us ignoring it
     try:
         ps.cmd_run(a5)
     except KeyboardInterrupt:
         crashed = "KeyboardInterrupt"
+    sigint_after = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, sigint_before)
     stops5 = [r.get("reason") for r in ps.Journal(a5.journal).read() if r.get("ev") == "stop"]
     print(f"[D5 early signal] crashed={crashed} stops={stops5}")
     expect("D5: a Ctrl-C while the run starts up: a clean stop 'signal', no crash",
            crashed is None and fired and stops5 == ["signal (Ctrl-C / SIGTERM)"])
-    expect("D5: the earlier SIGINT handler is back afterwards",
-           signal.getsignal(signal.SIGINT) is signal.default_int_handler)
+    expect("D5: the earlier SIGINT handler is back afterwards", sigint_after is signal.default_int_handler)
     ps.MIN_REWARD_PER_PROOF = keep
 
     print(f"[summary] {checks[0]} checks")

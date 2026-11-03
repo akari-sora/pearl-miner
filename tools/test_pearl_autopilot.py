@@ -734,6 +734,42 @@ with open(os.path.join(e.data, "run.pid"), "w") as f:
 rc = e.run([])
 expect("an unreadable run.pid refuses the start", rc == 1 and "already going" in e.err and not e.calls(), e.err)
 
+print("---- docs: what agents and people are told")
+
+
+def doc(rel):
+    with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+agent_docs = {r: doc(r) for r in ("skills/pearl-miner/SKILL.md", "docs/QUICKSTART.md", "docs/QUICKSTART.zh-TW.md",
+                                  "AGENTS.md")}
+piped = [(r, ln) for r, t in agent_docs.items() for ln in t.splitlines() if "echo yes |" in ln and "--day" not in ln]
+expect("E1: every piped yes in the agent docs carries --day", not piped, piped)
+expect("E1: the prompts and the skill run it with nohup",
+       all("nohup python3 pearl.py auto --day N" in agent_docs[r] for r in
+           ("skills/pearl-miner/SKILL.md", "docs/QUICKSTART.md", "docs/QUICKSTART.zh-TW.md")))
+expect("E1: after exit 3, ask again and keep --day; no rerun once the day's window is over",
+       "if that day's window is over, do not rerun" in agent_docs["skills/pearl-miner/SKILL.md"]
+       and "if that day's window is over, do not rerun" in agent_docs["docs/QUICKSTART.md"]
+       and "那一天的時段已過就不要重跑" in agent_docs["docs/QUICKSTART.zh-TW.md"])
+alltext = "".join(agent_docs.values()) + doc("pearl.py") + doc("docs/AGENTS-SETUP.md")
+expect("wording: nowhere 'this is that confirmation'", "this is that confirmation" not in alltext.lower())
+expect("wording: QUICKSTART says it does not mean Binance approves unattended use",
+       "It does not mean Binance approves unattended use" in agent_docs["docs/QUICKSTART.md"]
+       and "不代表 Binance 同意無人值守" in agent_docs["docs/QUICKSTART.zh-TW.md"])
+expect("B: the skill no longer says it simply 'sells as planned' after any stop",
+       "Then it sells as planned" not in agent_docs["skills/pearl-miner/SKILL.md"]
+       and "Only after a normal end" in agent_docs["skills/pearl-miner/SKILL.md"])
+expect("docs: the rehearsal is said to run with --sell off", "--sell off" in agent_docs["docs/QUICKSTART.md"]
+       and "--sell off" in agent_docs["docs/QUICKSTART.zh-TW.md"])
+expect("docs: Grok Bot: advise against signing baw in on the box, with the gbot check date",
+       "We advise against signing `baw` in on the bot's box" in doc("docs/AGENTS-SETUP.md")
+       and "建議不要在 bot 的 box 上登入 `baw`" in doc("docs/AGENTS-SETUP.zh-TW.md")
+       and "checked 2026-11-03" in doc("docs/AGENTS-SETUP.md"))
+expect("docs: exit 3 and 4 as the code has them", "an error after it" in agent_docs["docs/QUICKSTART.md"]
+       and "--max-sell-coins" in agent_docs["docs/QUICKSTART.md"])
+
 print("---- real processes: STOP and a real Ctrl-C (D6: Windows forwards it as CTRL_BREAK_EVENT)")
 if os.name == "nt":  # a session started without Ctrl-C handling would ignore CTRL_C_EVENT: switch it on
     import ctypes

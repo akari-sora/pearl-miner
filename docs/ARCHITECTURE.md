@@ -210,14 +210,42 @@ files together.
   `FINISHED` / `FAILED`; an order whose state is unknown stops the script instead of being sent again.
 - Progress is measured from the on-chain token balance, never from assumed fills. Restarts read `sell.jsonl` and keep
   the first session's kept amount.
+- `--max-sell-coins` caps what the session sells, whatever the balance shows later; `--keep-coins` and
+  `--max-sell-coins` are exact decimals.
+- `SIGINT`, `SIGTERM` and (Windows) `SIGBREAK` only set a flag: the loop stops at its `STOP` check, after an order in
+  flight was followed to `FINISHED` / `FAILED` and journaled. `baw` runs in a process group of its own.
 - `--dry-run` uses real quotes and simulated fills; nothing is sent.
+
+## The one command (`pearl.py`)
+
+`pearl.py auto` runs `check`, prints the plan, waits for `yes` and then starts `pearl_submit.py run` and, after it,
+`pearl_sell.py run` as child processes. It adds these gates of its own:
+
+- **Confirmation.** A piped answer needs `--day` (the yes cannot drift to a later day); a check `WARNING` refuses
+  `--yes` unless `--allow-used-elsewhere` is given.
+- **Right before the start.** The `STOP` file and `run.pid` are checked again and the journal lock is taken and
+  released, so a submitter started by hand is not doubled; if the child still finds the journal locked, `run.pid`
+  gets back what it held.
+- **Only a normal end sells.** The stop reason in the `SUMMARY` line must be one of: the day's cap full, the gas
+  budget spent, the BNB keep reserve reached, the proofs used up (no stop reason), the deadline, or the chain past
+  the day. Any other stop (a crash, a risk item, an approval the Binance App asks for, failed executes, a signal,
+  `STOP`, `UNSAFE_ARG`, ...) blocks the sale with exit 4, and the message gives the command to sell later.
+- **Never more than the run earned.** The balance is the highest answer of all RPCs and counts only once two reads in
+  a row agree (after the run: above the balance before it). The sale is at most `--sell-fraction` ×
+  min(after − before, proofs mined × the highest reward one proof can earn); that reward is `currentReward` read
+  before the start (it only falls as claims add up), or the emission formula if the chain cannot be read, which errs
+  low. The seller gets that number as `--max-sell-coins`, so coins that arrive from elsewhere are never sold.
+- **Ctrl-C.** It is passed on to the child (macOS and Linux: `SIGINT` to its own session; Windows: the child has
+  its own process group and gets `CTRL_BREAK_EVENT`), which finishes what is in flight; a second Ctrl-C leaves the
+  child running. After the run has started, pearl.py never reports "nothing was sent".
 
 ## 4. Verification harnesses
 
 | Harness | What it proves |
 |---|---|
 | `submit/test_submit.py` | the submitter against a fake chain and a fake `baw`: cap filling, risk items, execute timeouts, restarts from the journal, backend lag at the opening, transient errors, gas budget, `351716`, near-cap splitting, a second sender, a disconnected session, input checks (wallet and EIP-55, handle, `--min-reward`, `--day`), `check` on day 43 without a proofs file, `check` with a journal (proofs sent before are skipped) and with proofs used elsewhere (a warning, not a failure), and more. No proof is ever sent twice. |
-| `miner/test_autotune.py` | the miner's launch sizing without a GPU: a launch timed at 0 s, a negative or tiny time never grows the work, growth is at most 8x per step, and simulated devices from 2 MH/s to 10 GH/s never get a launch near the 2 s Windows watchdog. |
-| `submit/test_sell.py` | the seller against a constant-liquidity pool model calibrated on the real pool: impact cap, schedule, pullbacks, partial fills, refunds, lagging balance reads, timeouts, restarts, a `--wallet` that is not the wallet `baw` is signed in to. |
+| `miner/test_autotune.py` | the miner's launch sizing without a GPU: a launch timed at 0 s, a negative or tiny time never grows the work, growth is at most 8x per step, and simulated devices from 31 MH/s to 10 GH/s never get a launch near the 2 s Windows watchdog (on a much slower device the first launch of 2^22 work-items can take about 2 s; the sizing only shrinks it from there). |
+| `tools/test_pearl_autopilot.py` | `pearl.py` with fake child scripts: the confirmation and `--day` rules, the check gate and its warnings, the journal and budget, the gates right before the start, which stop reasons allow a sale (every stop reason in `pearl_submit.py` is classified), the sale cap with coins arriving from elsewhere and lagging balance reads, Ctrl-C in every phase, and a real `STOP` and a real Ctrl-C sent to pearl.py in a process of its own. |
+| `submit/test_sell.py` | the seller against a constant-liquidity pool model calibrated on the real pool: impact cap, schedule, pullbacks, partial fills, refunds, lagging balance reads, timeouts, restarts, a `--wallet` that is not the wallet `baw` is signed in to, `--max-sell-coins` with coins arriving mid-session, exact `--keep-coins`, and a signal while an order is in flight. |
 | `submit/fork_rehearsal/run_fork.py` | the real contract on an anvil fork of BSC. Your wallet is impersonated (no key), a fake `baw` turns preview / execute into `eth_call` / `eth_sendTransaction` on `127.0.0.1` only (the script refuses a local port that is already in use and stops at once if anvil exits while starting), the day before the target is set full so nothing can be mined early, the next day opens live 30 s after the start and a competitor eats the cap. It then checks that every proof in a successful transaction is used on chain, that the journal replays to nothing reserved or open, that the fees in the journal equal the balance spent, and that the run stopped because the cap was full. |
 | `tools/replay_log.py` | replays a run log with its original timing; `--anonymize` masks every hex value of 4+ digits after `0x`/`0X` (also cut-off ones), bare hex runs of 40+ characters, the handle in `keccak256('…')`, the local date and time, block numbers in any form, `check`'s block timestamp and e-mail addresses, replaces clock times with the time since the opening, removes block numbers and rounds BNB amounts. It hides values, not the run: the opening time is public, so the timing and the number of transactions can still be matched against the chain. `tools/test_replay_log.py` checks these rules offline. `run_fork.py --anonymize` applies the same rules live, for recordings. |

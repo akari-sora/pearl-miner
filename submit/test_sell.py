@@ -11,6 +11,7 @@ import pearl_sell as ps
 ps._submit.safe_stdio()
 ps._submit.find_baw = lambda: "baw"  # every case below replaces ps.baw; main() only needs baw to be found
 REAL_BAW = ps.baw
+INITIAL_SIGINT = signal.getsignal(signal.SIGINT)  # what every run must leave behind (SIG_IGN in a background shell)
 
 FAILED = []
 
@@ -674,7 +675,7 @@ finally:
 expect("D4: baw runs with own_group=True", seen.get("own_group") is True and r.get("success") is True)
 
 # 66. the seller's signal handlers are put back when it returns (an in-process caller keeps its Ctrl-C)
-expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is signal.default_int_handler)
+expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is INITIAL_SIGINT)
 
 print("FAILED:", FAILED or "none")
 sys.exit(1 if FAILED else 0)
