@@ -27,7 +27,10 @@ Rules this script enforces:
 - after a swap it polls `market-order list --orderId` to FINISHED / FAILED; an order still PENDING or with an
   unreadable status stops the script (state unknown: never resubmit blindly);
 - progress is measured from the on-chain token balance, never from assumed fills;
-- a STOP file next to this script stops it between steps; everything is journaled to sell.jsonl.
+- a STOP file next to this script, Ctrl-C, SIGTERM or (Windows) Ctrl-Break stops it between steps: an order
+  already placed is followed to FINISHED / FAILED and journaled first; everything is journaled to sell.jsonl;
+- --max-sell-coins caps what this session sells, whatever the balance reads later (coins that arrive from
+  elsewhere are never sold beyond it).
 
 Usage:
   python3 pearl_sell.py plan                 # read-only: balance, target, one reference quote
@@ -37,11 +40,12 @@ Usage:
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
 import urllib.request
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 
 import pearl_submit as _submit  # same folder: baw lookup and process helpers, safe console output
 from pearl_submit import wallet_problem  # same folder: 0x + 40 hex, EIP-55 checksum
@@ -65,6 +69,20 @@ def sleep(sec):
     time.sleep(sec)
 
 
+SIGNALLED = [False]  # set by Ctrl-C / SIGTERM / Ctrl-Break; the loop stops at its next STOP check
+
+
+def on_signal(signum, frame):
+    SIGNALLED[0] = True
+
+
+def pause(sec):
+    """A wait between steps that a signal cuts short (an order in flight is never waited on with this)."""
+    end = now() + sec
+    while not SIGNALLED[0] and now() < end:
+        sleep(min(1.0, end - now()))
+
+
 def say(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
@@ -82,7 +100,7 @@ class Journal:
 def baw(args, timeout=60):
     """Run `baw ... --json`; returns a dict ({"success": False, ...} on any failure)."""
     try:
-        out, err = _submit.finish_baw(_submit.start_baw(args), timeout)
+        out, err = _submit.finish_baw(_submit.start_baw(args, own_group=True), timeout)  # Ctrl-C never cuts it
         out, err = out or "", err or ""
     except subprocess.TimeoutExpired:
         return {"success": False, "error": {"code": "TIMEOUT", "message": f"baw {' '.join(args[:2])} timed out"}}
@@ -254,6 +272,26 @@ def cmd_plan(a):
 
 
 def cmd_run(a):
+    """Signals only set a flag while selling: the loop stops at its next STOP check, after any order in flight."""
+    SIGNALLED[0] = False
+    old = {}
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        if hasattr(signal, name):
+            try:
+                old[getattr(signal, name)] = signal.signal(getattr(signal, name), on_signal)
+            except (ValueError, OSError):
+                pass
+    try:
+        _cmd_run(a)
+    finally:
+        for sig, h in old.items():
+            try:
+                signal.signal(sig, h)
+            except (ValueError, OSError, TypeError):
+                pass
+
+
+def _cmd_run(a):
     j = Journal(a.journal)
     stop_file = os.path.join(HERE, "STOP")
     global SLIPPAGE
@@ -289,7 +327,7 @@ def cmd_run(a):
     start_bal = balance()
     if not a.dry_run:
         for _ in range(10):
-            sleep(30)
+            pause(30)
             try:
                 b2 = token_balance()
             except RuntimeError as e:
@@ -302,6 +340,8 @@ def cmd_run(a):
             low[0] = b2
         else:
             raise SystemExit("the token balance keeps changing: is something still sending?")
+        if SIGNALLED[0]:
+            raise SystemExit("stopped by a signal before any sale")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor = None, None, 0
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
@@ -330,14 +370,19 @@ def cmd_run(a):
         keep = max(int(prev["keep"]), keep)
         say(f"restart: keeping {keep / 10 ** DECIMALS:,.2f} coins (first run's keep, journal {a.journal})")
     if a.keep_coins is not None:
-        kc = int(Decimal(str(a.keep_coins)) * 10 ** DECIMALS)
+        kc = int((a.keep_coins * 10 ** DECIMALS).to_integral_value(rounding=ROUND_CEILING))  # exact, never less
         if kc < keep and prev is not None:
             raise SystemExit("--keep-coins is below the first run's kept amount")
         keep = kc
+    max_sell = None  # raw units this session may sell at most
+    if a.max_sell_coins is not None:
+        max_sell = int((a.max_sell_coins * 10 ** DECIMALS).to_integral_value(rounding=ROUND_FLOOR))
+        keep = max(keep, start_bal - max_sell)
     say(f"start balance {start_bal / 10 ** DECIMALS:,.2f}; keeping {keep / 10 ** DECIMALS:,.2f}; "
         f"selling {(start_bal - keep) / 10 ** DECIMALS:,.2f}")
-    j.write(ev="start" if prev is None else "restart", start_bal=start_bal, keep=keep, args=vars(a))
-    chunk, failed, waits, swaps, lwaits = a.chunk, 0, 0, 0, 0
+    j.write(ev="start" if prev is None else "restart", start_bal=start_bal, keep=keep,
+            args={k: (str(v) if isinstance(v, Decimal) else v) for k, v in vars(a).items()})
+    chunk, failed, waits, swaps, lwaits, sold_req = a.chunk, 0, 0, 0, 0, 0  # sold_req: coins in finished orders
     total_bnb = Decimal(0)
     t_start, last_sell, hist, qfail = now(), -1e18, [], 0
     start_sellable = max(1, start_bal - keep)
@@ -345,8 +390,8 @@ def cmd_run(a):
         t_start = float(prev.get("t", t_start))
         start_sellable = max(1, int(prev["start_bal"]) - keep)
     while True:
-        if os.path.exists(stop_file):
-            say("STOP file: stopping")
+        if os.path.exists(stop_file) or SIGNALLED[0]:
+            say("STOP file: stopping" if os.path.exists(stop_file) else "signal (Ctrl-C / SIGTERM): stopping")
             break
         try:
             bal = balance()
@@ -356,7 +401,7 @@ def cmd_run(a):
             if waits > a.max_waits:
                 say("balance unreadable too long: stopping")
                 break
-            sleep(5)
+            pause(5)
             continue
         sellable = (bal - keep) // 10 ** DECIMALS  # whole coins above the kept part
         if sellable < a.dust:
@@ -369,7 +414,7 @@ def cmd_run(a):
             if qfail > a.max_waits:
                 say("too many unusable quotes in a row: stopping")
                 break
-            sleep(a.poll)
+            pause(a.poll)
             continue
         qfail = 0
         raw_rates = (hist[-1][1] if hist else [])[-2:] + [ref / REF_QTY]
@@ -388,9 +433,14 @@ def cmd_run(a):
         if reason is None or t - last_sell < a.gap:
             say(f"hold: {rate:.10f} BNB/coin = {rate / high:.1%} of the high since start; "
                 f"sold {sold_frac:.0%} vs schedule {sched:.0%} at {el:.0f} min")
-            sleep(a.poll)
+            pause(a.poll)
             continue
         qty = min(chunk, sellable)
+        if max_sell is not None:
+            qty = min(qty, (max_sell - sold_req) // 10 ** DECIMALS)
+            if qty < 1:
+                say(f"--max-sell-coins {a.max_sell_coins} reached: done")
+                break
         out, qj = quote(qty)
         j.write(ev="quote", qty=qty, ref=str(ref), out=str(out), resp=qj, reason=reason)
         if out is None:
@@ -399,7 +449,7 @@ def cmd_run(a):
             if waits > a.max_waits:
                 say("too many unusable quotes: stopping")
                 break
-            sleep(a.gap)
+            pause(a.gap)
             continue
         impact = 1 - (out / qty) / (ref / REF_QTY)
         say(f"[{reason}] quote {qty:,} coins -> {out:.6f} BNB (impact {impact:.2%})")
@@ -413,11 +463,12 @@ def cmd_run(a):
                 say("impact stays too high: stopping")
                 break
             say(f"impact too high even at the minimum chunk; waiting {a.gap * 2}s")
-            sleep(a.gap * 2)
+            pause(a.gap * 2)
             continue
         waits = 0
         if a.dry_run:
             virtual[0] -= qty * 10 ** DECIMALS
+            sold_req += qty * 10 ** DECIMALS
             total_bnb += out
             j.write(ev="dry_fill", qty=qty, bnb=str(out))
             say(f"DRY: would sell {qty:,} coins for about {out:.6f} BNB (slippage cap {a.slippage}%)")
@@ -439,7 +490,7 @@ def cmd_run(a):
                 say("the order list stays unreadable: stopping")
                 break
             say("order list unreadable; retrying before the swap")
-            sleep(a.gap)
+            pause(a.gap)
             continue
         lwaits = 0
         swaps += 1
@@ -464,9 +515,10 @@ def cmd_run(a):
             if failed >= 2:
                 say("two failed orders in a row: stopping")
                 break
-            sleep(a.gap)
+            pause(a.gap)
             continue
         failed = 0
+        sold_req += qty * 10 ** DECIMALS
         got = (rec or {}).get("toTokenActualQty")
         try:
             total_bnb += Decimal(str(got)) if got is not None else 0
@@ -500,6 +552,17 @@ def cmd_run(a):
         say(e)
 
 
+def coins_value(s):
+    """argparse type: a number of coins as an exact Decimal, finite and not negative (no float rounding)."""
+    try:
+        d = Decimal(s)
+    except InvalidOperation:
+        raise argparse.ArgumentTypeError(f"not a number: {s!r}")
+    if not d.is_finite() or d < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number of coins, at least 0: {s!r}")
+    return d
+
+
 def main():
     _submit.safe_stdio()
     _submit.BAW = _submit.find_baw()
@@ -531,7 +594,9 @@ def main():
         s.add_argument("--max-swaps", type=int, default=40)
         s.add_argument("--gas-level", choices=("LOW", "MEDIUM", "HIGH"), default="MEDIUM")
         s.add_argument("--min-bnb", type=float, default=0.002, help="refuse to start with less BNB for gas")
-        s.add_argument("--keep-coins", type=float, default=None, help="override the coins to keep")
+        s.add_argument("--keep-coins", type=coins_value, default=None, help="override the coins to keep (exact)")
+        s.add_argument("--max-sell-coins", type=coins_value, default=None,
+                       help="sell at most this many coins in this session, whatever the balance shows")
         s.add_argument("--run-pid", default=os.path.join(HERE, "run.pid"))
         s.add_argument("--journal", default=None, help="default sell.jsonl (sell-dry.jsonl for --dry-run)")
         s.add_argument("--dry-run", action="store_true", help="real quotes, never sends a swap")

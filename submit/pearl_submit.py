@@ -265,9 +265,10 @@ class SenderLock:
 BAW = None  # full path of the baw CLI, set by main() with find_baw(); None runs plain "baw"
 UNSAFE_ARG = "UNSAFE_ARG"  # error code of a baw call refused before any process was started
 _CMD_SAFE = re.compile(r"[A-Za-z0-9_.,:=+/@-]+\Z")  # one or more of these, nothing else (\Z: not even a newline)
-# cmd.exe would expand % and ! even inside the quotes subprocess puts around a path with spaces; a path without
-# spaces is not quoted, and then & | < > ^ ( ) ; , = split it too
-_CMD_PATH_BAD_QUOTED = re.compile(r'[%!"]')
+# cmd.exe would expand % and ! even inside the quotes subprocess puts around a path with spaces, and npm's baw.cmd
+# runs `SET dp0=%~dp0` unquoted, where & | < > ^ split the path anyway; a path without spaces is not quoted at all,
+# and then ( ) ; , = split it too
+_CMD_PATH_BAD_QUOTED = re.compile(r'[&|<>^%!"\r\n]')
 _CMD_PATH_BAD_BARE = re.compile(r'[&|<>^%!"();,=]')
 
 
@@ -333,7 +334,11 @@ def kill_tree(p):
     would leave node.exe holding the output pipes. On POSIX a baw in its own session is killed as a group."""
     if not WINDOWS and getattr(p, "pearl_own_group", False):
         try:
-            if os.getpgid(p.pid) == p.pid:  # its own group (start_new_session), never ours
+            try:
+                pg = os.getpgid(p.pid)
+            except ProcessLookupError:  # macOS: an exited, unreaped leader has no pgid, its group may still live
+                pg = p.pid if p.returncode is None else None
+            if pg == p.pid and pg != os.getpgrp():  # its own group (start_new_session), never ours
                 os.killpg(p.pid, signal.SIGKILL)
         except OSError:
             pass
@@ -1668,6 +1673,8 @@ class Runner:
 
         def on_signal(signum, frame):  # no locks here: the watcher turns this into a stop
             self.signalled = True
+        if EARLY_SIGNAL[0]:  # signalled while starting up
+            self.signalled = True
 
         old = {}  # Windows: SIGINT is Ctrl-C, SIGBREAK Ctrl-Break; SIGTERM is accepted but never sent (use the STOP file)
         for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
@@ -1721,7 +1728,32 @@ def resolve_day(a):
                          f"{int((time.time() - START) // 86400) + 1})")
 
 
+EARLY_SIGNAL = [False]  # Ctrl-C / SIGTERM / Ctrl-Break before Runner.run installs its own handler
+
+
 def cmd_run(a):
+    """From the very start a signal becomes a clean stop (stop=signal in SUMMARY), not a crash in the middle of
+    reading the chain or starting baw; the earlier handlers come back at the end."""
+    EARLY_SIGNAL[0] = False
+    old = {}
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        if hasattr(signal, name):
+            try:
+                old[getattr(signal, name)] = signal.signal(getattr(signal, name),
+                                                           lambda signum, frame: EARLY_SIGNAL.__setitem__(0, True))
+            except (ValueError, OSError):
+                pass
+    try:
+        _cmd_run(a)
+    finally:
+        for sig, h in old.items():
+            try:
+                signal.signal(sig, h)
+            except (ValueError, OSError, TypeError):
+                pass
+
+
+def _cmd_run(a):
     global MIN_REWARD_PER_PROOF
     resolve_day(a)
     if getattr(a, "min_reward", None) is None:  # --min-reward overrides the per-day floor

@@ -6,6 +6,7 @@
 """
 import collections
 import re
+import signal
 import json
 import os
 import subprocess
@@ -315,6 +316,25 @@ def platform_checks(expect):
     check("cmd.exe guard: a baw path cmd.exe would split or expand is refused", len(path_refused) == 4, path_refused)
     check("cmd.exe guard: spaces, (x86) inside quotes and non-ASCII user names are fine", len(path_ok) == 3, path_ok)
     check("cmd.exe guard: not applied to an .exe", exe_cmd[1:] == ["x y", "--json"])
+    spaced = (r"C:\Users\R&D Team\npm\baw.cmd", r"C:\a b\x^y\baw.cmd", r"C:\a b\x|y\baw.cmd", r"C:\a b\x>y\baw.cmd")
+    check("N2: & | < > ^ in a path with spaces are refused too (npm's baw.cmd runs SET dp0=%~dp0 unquoted)",
+          all(ps.cmd_path_problem(p_) for p_ in spaced), [p_ for p_ in spaced if not ps.cmd_path_problem(p_)])
+    if not ps.WINDOWS:  # macOS: an exited, unreaped session leader has no pgid; its group must still be killed
+
+        class FakeLeader:
+            pid, returncode, pearl_own_group = 4206649, None, True
+
+            def kill(self):
+                pass
+        killed, saved_gp, saved_kp = [], os.getpgid, os.killpg
+        os.getpgid = lambda pid: (_ for _ in ()).throw(ProcessLookupError())
+        os.killpg = lambda pg, sig: killed.append(pg)
+        try:
+            ps.kill_tree(FakeLeader())
+        finally:
+            os.getpgid, os.killpg = saved_gp, saved_kp
+        check("N3: getpgid fails with ESRCH (macOS zombie leader): killpg(p.pid) all the same", killed == [4206649],
+              killed)
     kind, _ = ps.judge_preview({"success": False, "error": {"code": ps.UNSAFE_ARG,
                                                            "message": "argument not safe: 'timeout 429'"}})
     check("UNSAFE_ARG from a preview stops the run (refuse, even with transient words)", kind == "refuse", kind)
@@ -960,6 +980,39 @@ def main():
     expect("check: every proof sent before: HAS PROBLEMS", out[-1] == "CHECK HAS PROBLEMS")
     out, _, _ = check_case("other simulation failure", 200, (), sim_error="0xd9c1988f")
     expect("check: InvalidSolution is not relaxed: HAS PROBLEMS", out[-1] == "CHECK HAS PROBLEMS")
+
+    # D5: a Ctrl-C while the run is still starting up (reading the chain, starting baw) is a clean stop, no crash
+    c = FakeChain(open_in=30, cap_proofs=10 ** 6)
+    tmp5 = tempfile.mkdtemp(prefix="sig-")
+    pf5 = os.path.join(tmp5, "proofs.json")
+    make_proofs(pf5, 64)
+    ps.baw, ps.chain_state, ps.receipt, ps.simulate = c.baw, c.state, c.receipt, c.simulate
+    ps.owner_burned = lambda: True
+    ps.proof_used = lambda p: (int(p, 16) - 6) in (c.used_nonces | c.done)
+    fired = []
+
+    def balance_then_ctrl_c():
+        if not fired:
+            fired.append(1)
+            signal.raise_signal(signal.SIGINT)  # as if Ctrl-C arrived while Runner reads the start balance
+        return 49_889_000_000_000_000
+    ps.bnb_balance = balance_then_ctrl_c
+    ps.START = c.open_at - 86400
+    a5 = types.SimpleNamespace(proofs=pf5, journal=os.path.join(tmp5, "j.jsonl"), day=1, budget_bnb=0.045,
+                               keep_bnb=0.005, minutes=0.5, previewers=2, executors=1, max_inflight=30, lead=0.6,
+                               stagger=0.3, settle=1.5, stop_file=os.path.join(tmp5, "STOP"), min_reward=None)
+    crashed = None
+    try:
+        ps.cmd_run(a5)
+    except KeyboardInterrupt:
+        crashed = "KeyboardInterrupt"
+    stops5 = [r.get("reason") for r in ps.Journal(a5.journal).read() if r.get("ev") == "stop"]
+    print(f"[D5 early signal] crashed={crashed} stops={stops5}")
+    expect("D5: a Ctrl-C while the run starts up: a clean stop 'signal', no crash",
+           crashed is None and fired and stops5 == ["signal (Ctrl-C / SIGTERM)"])
+    expect("D5: the earlier SIGINT handler is back afterwards",
+           signal.getsignal(signal.SIGINT) is signal.default_int_handler)
+    ps.MIN_REWARD_PER_PROOF = keep
 
     print(f"[summary] {checks[0]} checks")
     print("FAILED:", fails if fails else "none")

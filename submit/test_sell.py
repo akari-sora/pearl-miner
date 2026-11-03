@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Akari Sora
 """Offline simulation of pearl_sell.py: fake baw + a constant-liquidity pool model calibrated on the
 PancakeSwap Infinity pool (evening of 2026-11-03: L = 7.06e17, 431,426 coins per BNB, fee 0.3726%)."""
-import json, math, os, subprocess, sys, tempfile, time
+import json, math, os, signal, subprocess, sys, tempfile, time
 from decimal import Decimal
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -10,6 +10,7 @@ os.environ["PEARL_WALLET"] = "0x00000000000000000000000000000000DeaDBeef"  # dum
 import pearl_sell as ps
 ps._submit.safe_stdio()
 ps._submit.find_baw = lambda: "baw"  # every case below replaces ps.baw; main() only needs baw to be found
+REAL_BAW = ps.baw
 
 FAILED = []
 
@@ -66,7 +67,9 @@ class Env:
     def __init__(self, coins, pool=None, fail_orders=0, pending_forever=False, swap_errors=0, bad_quotes=0,
                  partial=False, dump_after=None, swap_timeout=False, pending_exists=False, full_refund=False,
                  stale_reads=0, no_actual_qty=False, nan_quotes=0, bnb=0.04, swap_reply=None, alternate_stale=False,
-                 outlier_at=None, flaky_every=0, pending_after=None, pending_unreadable=0, signed_in=None):
+                 outlier_at=None, flaky_every=0, pending_after=None, pending_unreadable=0, signed_in=None,
+                 signal_after_swaps=None, signal_on_read=None):
+        self.signal_after_swaps, self.signal_on_read = signal_after_swaps, signal_on_read  # Ctrl-C at that point
         self.signed_in = os.environ["PEARL_WALLET"] if signed_in is None else signed_in  # baw wallet address
         self.pending_unreadable = pending_unreadable
         self.swap_reply, self.alternate_stale, self.outlier_at = swap_reply, alternate_stale, outlier_at
@@ -134,6 +137,8 @@ class Env:
             assert "--mev" in args and args[args.index("--mev") + 1] == "true"
             oid = str(1000 + len(self.swaps))
             self.swaps.append(qty)
+            if self.signal_after_swaps and len(self.swaps) >= self.signal_after_swaps:
+                ps.on_signal(2, None)  # Ctrl-C while this order is in flight
             self.orders[oid] = {"qty": qty, "polls": 0}
             return {"success": True, "data": {"orderId": oid}}
         if cmd == ["market-order", "list"] and "--status" in args:
@@ -191,6 +196,8 @@ def run(name, env, argv, run_alive=False, stop_file=False, no_pid=False, tmp=Non
 
     def bal():  # a lagging RPC keeps returning the old balance for a few reads after a fill
         env.bal_hist.append(env.bal)
+        if env.signal_on_read and len(env.bal_hist) == env.signal_on_read:
+            ps.on_signal(2, None)
         if env.alternate_stale:  # two nodes behind a load balancer: every other read is a minute old
             env.flip = not env.flip
             old = env.bal_hist[max(0, len(env.bal_hist) - 40)]
@@ -595,6 +602,79 @@ e = Env(300_000)
 err = run("baw not found", e, ["run", "--mode", "now"])
 ps._submit.find_baw = lambda: "baw"
 expect("baw not found: refuses before anything else, nothing sold", err and "baw not found" in err and e.swaps == [])
+
+# ---- review round: --max-sell-coins, exact --keep-coins, signals, baw in its own group
+def journal_events(tmp):
+    with open(os.path.join(tmp, "sell.jsonl"), encoding="utf-8") as f:
+        return [json.loads(x) for x in f if x.strip()]
+
+
+# 59. --max-sell-coins caps the session's sales below the fraction
+e = Env(300_000)
+run("max sell 50k", e, ["run", "--mode", "now", "--max-sell-coins", "50000"])
+expect("A4: --max-sell-coins 50000: sells 50,000, not 80%", sum(e.swaps) == 50_000 and e.bal == 250_000 * 10 ** 8)
+
+# 60. ... also with --keep-coins lower than that, and with coins arriving while it sells
+e = Env(300_000)
+e.inflow = True
+orig_baw = e.baw
+
+
+def baw_with_inflow(args, timeout=60, _e=e, _orig=orig_baw):
+    r = _orig(args, timeout)
+    if args[:2] == ["market-order", "swap"]:
+        _e.bal += 400_000 * 10 ** 8  # coins from elsewhere land right after the first swap
+    return r
+
+
+e.baw = baw_with_inflow
+run("max sell with inflow", e, ["run", "--mode", "now", "--keep-coins", "0", "--max-sell-coins", "120000"])
+expect("A4: --max-sell-coins holds while coins arrive mid-session and --keep-coins is 0", 0 < sum(e.swaps) <= 120_000)
+
+# 61. --keep-coins is exact: no float on the way (987654321.98765432 is not a float)
+tmpd = tempfile.mkdtemp(prefix="sell-dec-")
+e = Env(1_000_000_000)
+run("exact keep", e, ["run", "--mode", "now", "--keep-coins", "987654321.98765432", "--max-swaps", "1"], tmp=tmpd)
+start = next((r for r in journal_events(tmpd) if r.get("ev") == "start"), {})
+expect("A4: --keep-coins 987654321.98765432 is kept to the last unit", start.get("keep") == 98765432198765432)
+expect("A4: the journal records Decimal arguments as text", start.get("args", {}).get("keep_coins") == "987654321.98765432")
+for bad in ("NaN", "-1", "Infinity", "abc"):
+    e = Env(300_000)
+    err = run(f"bad --keep-coins {bad}", e, ["run", "--mode", "now", "--keep-coins", bad])
+    expect(f"A4: --keep-coins {bad} refused, nothing sold", err is not None and e.swaps == [])
+
+# 62. Ctrl-C while an order is in flight: it is followed to FINISHED and journaled, then the seller stops
+tmpd = tempfile.mkdtemp(prefix="sell-sig-")
+e = Env(300_000, signal_after_swaps=1)
+run("signal during the first order", e, ["run", "--mode", "now"], tmp=tmpd)
+evs = [r.get("ev") for r in journal_events(tmpd)]
+expect("D4: a signal during an order: that order finishes and is journaled, no second swap, an end record",
+       e.swaps == [100_000] and e.bal == 200_000 * 10 ** 8 and "filled" in evs and evs[-1] == "end")
+
+# 63. Ctrl-C while it waits for the balance to settle: no sale at all
+e = Env(300_000, signal_on_read=1)
+err = run("signal before any sale", e, ["run", "--mode", "now"])
+expect("D4: a signal before any sale: stops with a reason, nothing sold",
+       err and "signal before any sale" in err and e.swaps == [])
+
+# 64. a third run after the signalled ones sells normally (the flag starts cleared)
+e = Env(300_000)
+run("normal after signals", e, ["run"])
+expect("D4: the next session starts without the signal flag", e.swaps == [100_000, 100_000, 40_000])
+
+# 65. baw starts in a group of its own: the terminal's Ctrl-C never cuts an order in flight
+seen = {}
+saved_start, saved_finish = ps._submit.start_baw, ps._submit.finish_baw
+ps._submit.start_baw = lambda args, own_group=False: seen.setdefault("own_group", own_group) or object()
+ps._submit.finish_baw = lambda p, timeout: ('{"success": true, "data": {}}', "")
+try:
+    r = REAL_BAW(["wallet", "address"])
+finally:
+    ps._submit.start_baw, ps._submit.finish_baw = saved_start, saved_finish
+expect("D4: baw runs with own_group=True", seen.get("own_group") is True and r.get("success") is True)
+
+# 66. the seller's signal handlers are put back when it returns (an in-process caller keeps its Ctrl-C)
+expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is signal.default_int_handler)
 
 print("FAILED:", FAILED or "none")
 sys.exit(1 if FAILED else 0)

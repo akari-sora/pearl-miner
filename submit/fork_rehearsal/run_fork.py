@@ -102,6 +102,19 @@ class RedactedStream(io.TextIOBase):
             self.inner.flush()
 
 
+def autopilot_checks(work, rc):
+    """The end checks of --autopilot. pearl.py may refuse before the run (no run.log, no run.pid): that is a FAIL
+    in the table, not a crash. Exit 0 also means check printed CHECK OK: pearl.py refuses to start otherwise."""
+    sys.path.insert(0, os.path.dirname(SUBMIT))
+    import pearl
+    path, pid_file = os.path.join(work, "run.log"), os.path.join(work, "run.pid")
+    log = open(path, encoding="utf-8", errors="replace").read() if os.path.exists(path) else ""
+    return {"autopilot: pearl.py exit 0 (check OK, run ended with SUMMARY)": rc == 0,
+            "autopilot: run.log has the run's SUMMARY": "SUMMARY txs=" in log,
+            "autopilot: run.pid names the run, now finished": (pearl.read_pid(pid_file) is not None
+                                                               and not pearl.run_alive(pid_file))}
+
+
 def main():
     ps.safe_stdio()
     ap = argparse.ArgumentParser()
@@ -116,6 +129,8 @@ def main():
     ap.add_argument("--port", default=PORT, help="local anvil port, must be free (env PEARL_FORK_PORT; default 8547)")
     ap.add_argument("--autopilot", action="store_true",
                     help="run `pearl.py auto --yes --sell off` (check + run as child processes) instead of the submitter")
+    ap.add_argument("--budget-bnb", default=None,
+                    help="gas budget passed on (default: the submitter's 0.045 BNB, earlier runs in the journal included)")
     ap.add_argument("--journal", default=None, help="an earlier journal.jsonl to copy in, so proofs sent before are "
                     "skipped (with --autopilot: submit/journal.jsonl if it exists)")
     ap.add_argument("--anonymize", action="store_true",
@@ -265,11 +280,12 @@ def main():
             sys.path.insert(0, os.path.dirname(SUBMIT))
             import pearl
             rc = pearl.main(["auto", "--yes", "--sell", "off", "--day", str(target), "--minutes", str(a.minutes),
-                             "--dir", work])
+                             "--dir", work] + (["--budget-bnb", str(a.budget_bnb)] if a.budget_bnb else []))
         else:
             sys.argv = ["pearl_submit.py", "run", "--day", str(target), "--proofs", proofs, "--journal", journal,
                         "--minutes", str(a.minutes), "--stop-file", os.path.join(work, "STOP"),
-                        "--wallet", ps.WALLET, "--handle", ps.HANDLE]
+                        "--wallet", ps.WALLET, "--handle", ps.HANDLE] + (
+                            ["--budget-bnb", str(a.budget_bnb)] if a.budget_bnb else [])
             try:
                 ps.main()
             except SystemExit as e:
@@ -308,13 +324,8 @@ def main():
         }
         if a.journal:
             checks["no proof from the earlier journal sent again"] = not blocked0 & set(sent_proofs)
-        if a.autopilot:  # exit 0 also means check printed CHECK OK: pearl.py refuses to start the run otherwise
-            log = open(os.path.join(work, "run.log"), encoding="utf-8", errors="replace").read()
-            pid_file = os.path.join(work, "run.pid")
-            checks["autopilot: pearl.py exit 0 (check OK, run ended with SUMMARY)"] = rc == 0
-            checks["autopilot: run.log has the run's SUMMARY"] = "SUMMARY txs=" in log
-            checks["autopilot: run.pid names the run, now finished"] = (pearl.read_pid(pid_file) is not None
-                                                                         and not pearl.run_alive(pid_file))
+        if a.autopilot:
+            checks.update(autopilot_checks(work, rc))
         for k, v in checks.items():
             print(f"  [{'PASS' if v else 'FAIL'}] {k}")
         print("FORK REHEARSAL:", "PASS" if all(checks.values()) else "FAIL")
