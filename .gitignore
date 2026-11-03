@@ -1,0 +1,21 @@
+# proofs and miner output (bound to your wallet)
+proofs.csv
+proofs.json
+proofs.*.json
+# run journals, logs and pid files (operational data)
+*.jsonl
+*.log
+!demo/*.log
+run.pid
+# kill switches
+STOP
+# python
+__pycache__/
+*.pyc
+.venv/
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+# local agent state
+.omc/

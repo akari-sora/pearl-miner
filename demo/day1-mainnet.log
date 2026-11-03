@@ -1,0 +1,37 @@
+T-851.52s wallet session CONNECTED
+T-851.52s owner burned (nobody can pause/resume): True
+T-851.52s run: 28063 usable proofs in 1754 batches (0 blocked); balance ~0.05 BNB, fees so far ~0, effective budget ~0.04, keep 0.005; previewers 3, executors 1; day 1 opens unix 1793704134 (851s from now)
+T+0.00s chain is on day 1: open (remaining 20000000, reward 95.6049)
+T+0.23s status: sent 0 mined 0 proofs, reverted 0, in-flight 0, ready 0, fees ~0 BNB
+T+2.53s tx#1 broadcast 0x████…████ (16 proofs, execute 2.10s)
+T+5.43s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+7.98s tx#2 broadcast 0x████…████ (16 proofs, execute 2.54s)
+T+8.13s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+10.51s tx#3 broadcast 0x████…████ (16 proofs, execute 2.37s)
+T+13.40s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+15.24s status: sent 3 mined 48 proofs, reverted 0, in-flight 0, ready 4, fees ~0.0001 BNB
+T+15.43s tx#4 broadcast 0x████…████ (16 proofs, execute 2.01s)
+T+19.07s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+20.33s tx#5 broadcast 0x████…████ (16 proofs, execute 1.89s)
+T+23.61s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+25.34s tx#6 broadcast 0x████…████ (16 proofs, execute 2.00s)
+T+28.29s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+29.89s tx#7 broadcast 0x████…████ (16 proofs, execute 1.59s)
+T+30.24s status: sent 7 mined 96 proofs, reverted 0, in-flight 1, ready 3, fees ~0.0003 BNB
+T+34.71s tx#8 broadcast 0x████…████ (16 proofs, execute 1.80s)
+T+37.27s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+37.57s receipt 0x████…████ status 1 mined 16 fee ~0.00005
+T+38.98s tx#9 broadcast 0x████…████ (16 proofs, execute 1.66s)
+T+41.82s receipt 0x████…████ status 1 mined 16 fee ~0.00006
+T+43.90s tx#10 broadcast 0x████…████ (16 proofs, execute 2.06s)
+T+45.24s status: sent 10 mined 144 proofs, reverted 0, in-flight 1, ready 3, fees ~0.0005 BNB
+T+47.60s receipt 0x████…████ status 1 mined 16 fee ~0.00006
+T+49.16s tx#11 broadcast 0x████…████ (16 proofs, execute 2.25s)
+T+52.52s receipt 0x████…████ status 1 mined 16 fee ~0.00006
+T+53.69s tx#12 broadcast 0x████…████ (16 proofs, execute 1.52s)
+T+56.89s receipt 0x████…████ status 1 mined 16 fee ~0.00006
+T+58.29s tx#13 broadcast 0x████…████ (16 proofs, execute 1.59s)
+T+58.71s STOP: day 1 budget full (remaining 16.00 < reward 91.31)
+T+60.25s status: sent 13 mined 192 proofs, reverted 0, in-flight 1, ready 3, fees ~0.0006 BNB
+T+61.30s receipt 0x████…████ status 0 mined 0 fee ~0.000006
+T+61.75s SUMMARY txs=13 proofs_mined=192 reverted=1 fees=~0.0006 BNB stop=day 1 budget full (remaining 16.00 < reward 91.31)

@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""FAKE baw for the local anvil fork rehearsal. Talks ONLY to FAKEBAW_RPC (default http://127.0.0.1:8547).
+contract-call preview -> eth_call + eth_estimateGas on the fork (fails like baw: 351805 "execution reverted")
+contract-call execute -> eth_sendTransaction from the impersonated wallet on the fork
+Latencies mimic the real wallet backend (preview ~1.6 s, execute ~1.8 s); a second execute while the previous
+tx is still unmined returns 351716 like the real backend."""
+import fcntl
+import json
+import os
+import sys
+import time
+import urllib.request
+
+RPC = os.environ.get("FAKEBAW_RPC", "http://127.0.0.1:8547")
+STATE = os.environ["FAKEBAW_STATE"]
+assert RPC.startswith("http://127.0.0.1"), "fake baw must only talk to the local fork"
+PREVIEW_S = float(os.environ.get("FAKEBAW_PREVIEW_S", "1.6"))
+EXEC_S = float(os.environ.get("FAKEBAW_EXEC_S", "1.8"))
+GAS_PRICE = int(float(os.environ.get("FAKEBAW_GWEI", "0.08")) * 1e9)
+
+
+def rpc(method, params):
+    req = urllib.request.Request(RPC, json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode(),
+                                 {"content-type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=30))
+
+
+def out(obj):
+    print(json.dumps(obj))
+    sys.exit(0)
+
+
+def arg(name):
+    a = sys.argv
+    return a[a.index(name) + 1] if name in a else None
+
+
+def with_state(fn):
+    with open(STATE + ".lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        st = json.load(open(STATE)) if os.path.exists(STATE) else {"n": 0, "req": {}, "last_tx": None}
+        r = fn(st)
+        json.dump(st, open(STATE + ".tmp", "w"))
+        os.replace(STATE + ".tmp", STATE)
+        return r
+
+
+def main():
+    a = sys.argv[1:]
+    if a[:2] == ["contract-call", "preview"]:
+        t0 = time.time()
+        tx = {"from": arg("--from"), "to": arg("--to"), "data": arg("--inputData"), "value": "0x0"}
+        c = rpc("eth_call", [tx, "latest"])
+        g = rpc("eth_estimateGas", [tx, "latest"]) if "error" not in c else c
+        time.sleep(max(0.0, PREVIEW_S - (time.time() - t0)))
+        if "error" in c or "error" in g:
+            out({"success": False, "error": {"code": 351805, "name": "SERVICE_ERROR",
+                                             "message": "Transaction simulation failed: execution reverted"}})
+        gas = int(int(g["result"], 16) * 1.3)
+
+        def put(st):
+            st["n"] += 1
+            rid = f"fork-{st['n']}"
+            st["req"][rid] = dict(tx, gas=hex(gas))
+            return rid
+        rid = with_state(put)
+        out({"success": True, "data": {"requestId": rid, "requireConfirmation": False, "gasLimit": gas,
+                                       "simulationResult": {"simulationCode": "000000000"},
+                                       "risks": {"riskDetails": [], "addresses": {}, "riskBehaviors": []},
+                                       "expiresAt": int((time.time() + 300) * 1000)}})
+    if a[:2] == ["contract-call", "execute"]:
+        t0 = time.time()
+        rid = arg("--requestId")
+
+        def take(st):
+            last = st.get("last_tx")
+            if last:
+                r = rpc("eth_getTransactionReceipt", [last]).get("result")
+                if r is None:
+                    return "busy"
+            tx = st["req"].pop(rid, None)
+            if tx is None:
+                return "unknown"
+            r = rpc("eth_sendTransaction", [dict(tx, gasPrice=hex(GAS_PRICE))])
+            if "error" in r:
+                return {"err": r["error"]}
+            st["last_tx"] = r["result"]
+            return r["result"]
+        res = with_state(take)
+        time.sleep(max(0.0, EXEC_S - (time.time() - t0)))
+        if res == "busy":
+            out({"success": False, "error": {"code": 351716, "name": "SERVICE_ERROR",
+                                             "message": "A transaction to the same address on this network is already in progress."}})
+        if res == "unknown":
+            out({"success": False, "error": {"code": 351700, "message": "request not found or expired"}})
+        if isinstance(res, dict):
+            out({"success": False, "error": {"code": "FORK_SEND_ERROR", "message": str(res["err"])[:300]}})
+        out({"success": True, "data": {"status": "BROADCASTED", "txHash": res}})
+    if a[:2] == ["wallet", "status"]:
+        out({"success": True, "data": {"status": "CONNECTED"}})
+    out({"success": True, "data": {"fake": True, "args": a}})
+
+
+if __name__ == "__main__":
+    main()

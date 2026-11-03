@@ -1,0 +1,5 @@
+# GPU miner (miner/miner.py) and proof export (submit/export_proofs.py).
+# The submitter and the seller use the Python standard library only.
+numpy
+pyopencl
+pycryptodome
