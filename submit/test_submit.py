@@ -389,14 +389,35 @@ def platform_checks(expect):
 
 
 def main():
-    """Every temp dir of this run goes under one dir of its own, removed at the end, also after a failure."""
+    """Every temp dir of this run goes under one dir of its own, removed at the end, also after a failure. The
+    journals and sender locks the cases opened are closed first: Windows cannot delete a file that is open."""
     own, saved = tempfile.mkdtemp(prefix="pearl-test-submit-"), tempfile.tempdir
     tempfile.tempdir = own
+    opened, j_init, l_init = [], ps.Journal.__init__, ps.SenderLock.__init__
+
+    def journal_init(self, *a, **k):
+        j_init(self, *a, **k)
+        opened.append(self)
+
+    def lock_init(self, *a, **k):
+        l_init(self, *a, **k)
+        opened.append(self)
+    ps.Journal.__init__, ps.SenderLock.__init__ = journal_init, lock_init
+    code = 1
     try:
-        return _main()
+        code = _main()
     finally:
+        ps.Journal.__init__, ps.SenderLock.__init__ = j_init, l_init
+        for o in reversed(opened):
+            try:
+                o.release() if isinstance(o, ps.SenderLock) else o.f.close()
+            except (OSError, ValueError):
+                pass
         tempfile.tempdir = saved
         shutil.rmtree(own, ignore_errors=True)
+        if os.path.exists(own):
+            print(f"WARNING: could not remove {own}")
+    sys.exit(code)
 
 
 def _main():
@@ -1030,7 +1051,7 @@ def _main():
 
     print(f"[summary] {checks[0]} checks")
     print("FAILED:", fails if fails else "none")
-    sys.exit(1 if fails else 0)
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":
