@@ -102,6 +102,8 @@ if mined and mode != "nogrow":
 if mode == "stop":
     open(arg("--stop-file"), "w").close()
     stop = "STOP file"
+if os.environ.get("FAKE_CRASH_LINE"):  # a worker crashed after the run had already stopped for a normal reason
+    print("12:00:29.000 crash in tracker: KeyError('x')", flush=True)
 print(f"12:00:30.000 SUMMARY txs={(mined + 15) // 16} proofs_mined={mined} reverted=0 fees=0.002300 BNB stop={stop}",
       flush=True)
 '''
@@ -204,7 +206,7 @@ class Env:
              "PEARL_EXPORT_SCRIPT": os.path.join(self.d, "fake_export.py"),
              "PATH": os.path.join(self.d, "nobaw") + os.pathsep + os.environ.get("PATH", ""),
              "FAKE_CHECK": None, "FAKE_RUN": None, "FAKE_SELL": None, "FAKE_MINED": None, "FAKE_STOP": None,
-             "FAKE_EXTRA": None}
+             "FAKE_EXTRA": None, "FAKE_CRASH_LINE": None}
         e.update(extra or {})
         return e
 
@@ -361,7 +363,7 @@ rc = e.run([], answer=" YES ")
 expect("answer yes: runs and sells", rc == 0 and len(e.calls("sell")) == 1 and e.answers, (rc, e.err))
 expect("plan: shows day, UTC time, budget, keep reserve, usable proofs, sell plan",
        all(s in e.out for s in ("opens", " UTC", "budget 0.045 BNB", "Keep reserve 0.005", "40 usable",
-                                "Sells at most 80% of the coins THIS run mines", "approves this plan in advance")), e.out)
+                                "Sells at most 80% of what THIS run's proofs can have earned", "approves this plan in advance")), e.out)
 expect("wording: advance approval of the plan, not the Binance App's confirmation of each transaction",
        "This is your advance approval of this plan, not the Binance App's confirmation of each transaction" in e.out
        and "whether Binance accepts it is up to Binance" in e.out and "this is that confirmation" not in e.out, e.out)
@@ -397,6 +399,14 @@ expect("E3: ... allowed with --allow-used-elsewhere, and the warning is in the p
 e = Env()
 rc = e.run(["--sell", "off"], env={"FAKE_CHECK": "warn"})
 expect("E3: ... and with a typed yes (the user saw the warning)", rc == 0 and len(e.calls("submit")) == 2, (rc, e.err))
+e = Env()
+rc = e.run(["--day", "40", "--sell", "off"], env={"FAKE_CHECK": "warn"}, tty=False)
+expect("N1: a yes from a pipe (no terminal, --day) after a check WARNING: refused like --yes, nothing started",
+       rc == 1 and "--allow-used-elsewhere" in e.err and "a yes from a pipe" in e.err and len(e.calls("submit")) == 1
+       and e.answers == [], (rc, e.err))
+e = Env()
+rc = e.run(["--day", "40", "--sell", "off", "--allow-used-elsewhere"], env={"FAKE_CHECK": "warn"}, tty=False)
+expect("N1: ... allowed with --allow-used-elsewhere", rc == 0 and len(e.calls("submit")) == 2, (rc, e.err))
 
 print("---- preflight")
 e = Env()
@@ -516,8 +526,8 @@ e = Env()
 with open(os.path.join(e.data, "run.pid"), "w") as f:
     f.write("4206649\n")  # an earlier run's pid, long finished
 rc = e.run(["--yes"], env={"FAKE_RUN": "locked"})
-expect("C: the child found the journal locked: exit 3 and run.pid holds what it held before",
-       rc == 3 and open(os.path.join(e.data, "run.pid")).read() == "4206649\n", (rc, e.err))
+expect("N2: the child found the journal locked: exit 3 and no run.pid at all (an old pid there would let the "
+       "seller start)", rc == 3 and not os.path.exists(os.path.join(e.data, "run.pid")), (rc, e.err))
 e = Env()
 rc = e.run(["--yes"], env={"FAKE_RUN": "locked"})
 expect("C: ... and with no run.pid before, none after", rc == 3 and not os.path.exists(os.path.join(e.data, "run.pid")))
@@ -599,6 +609,17 @@ expect("balance unreadable: the run goes ahead, the sale is skipped, exit 4",
 e = Env()
 rc = e.run(["--yes"], env={"FAKE_SELL": "refuse"})
 expect("seller refuses: exit 4 with its reason", rc == 4 and "not the wallet baw is signed in to" in e.err, e.err)
+expect("N4: the seller stopped after it started: the message says coins may be sold already, see status and sell.log",
+       "Some coins may be sold already" in e.err and "pearl.py status" in e.err and "sell.log" in e.err
+       and "To sell later" not in e.err, e.err)
+e = Env()
+rc = e.run(["--yes"], env={"FAKE_RUN": "nothing", "FAKE_STOP": "STOP file"})
+expect("N4: an abnormal stop before anything was mined: exit 4, no sell command (no --max-sell-coins 0)",
+       rc == 4 and "mined no proofs" in e.err and "--max-sell-coins" not in e.err and not e.calls("sell"), (rc, e.err))
+e = Env()
+rc = e.run(["--yes"], env={"FAKE_CRASH_LINE": "1"})
+expect("N6: a 'crash in' line after a normal stop reason blocks the sale, exit 4",
+       rc == 4 and not e.calls("sell") and "reported a crash" in e.err and "crash in tracker" in e.err, (rc, e.err))
 
 print("---- D: Ctrl-C at each phase")
 e = Env(balance=1000)
@@ -670,6 +691,8 @@ except Exception as ex:  # noqa: BLE001
 rf_src = open(os.path.join(ROOT, "submit", "fork_rehearsal", "run_fork.py"), encoding="utf-8").read()
 expect("E3: the fork rehearsal answers yes with --day like an agent, never --yes (a check WARNING does not refuse it)",
        '"--yes"' not in rf_src and "pearl.read_answer = answer_yes" in rf_src and '"--day", str(target)' in rf_src)
+expect("N1: the fork rehearsal passes --allow-used-elsewhere (its piped yes would be refused after a WARNING)",
+       '"--allow-used-elsewhere"' in rf_src)
 expect("F6: run_fork exits 1 when the rehearsal fails", "sys.exit(0 if main() else 1)" in rf_src)
 
 print("---- status")
@@ -735,6 +758,14 @@ lists = ("AGENTS.md", "skills/pearl-miner/SKILL.md", "docs/QUICKSTART.md", "docs
 missing = [(r, t) for r in lists for t in SUITES if os.path.basename(t) not in doc(r)]
 expect("docs: every test list names all six offline suites", not missing and all(
     os.path.exists(os.path.join(ROOT, t)) for t in SUITES), missing)
+overclaims = ("never sells coins you already held", "older coins are never sold", "held before are never sold",
+              "Coins you held before are never sold", "elsewhere are never sold.", "原本持有的幣不會被賣",
+              "之前就有的幣永遠不會賣", "從別處轉入的幣不會被賣", "every coin you held before the run stay")
+said = [(r, o) for r in lists + ("pearl.py",) for o in overclaims if o in doc(r)]
+expect("N5: no doc claims coins held before are never sold (the cap is the reward bound x fraction)", not said, said)
+expect("N4: the exit-4 rows say a seller stopped part way may have sold some: check status and sell.log",
+       all("sell.log" in doc(r) and "pearl.py status" in doc(r) for r in ("docs/QUICKSTART.md", "skills/pearl-miner/SKILL.md"))
+       and "submit/sell.log" in doc("docs/QUICKSTART.zh-TW.md"))
 expect("docs: exit 3 and 4 as the code has them", "an error after it" in agent_docs["docs/QUICKSTART.md"]
        and "--max-sell-coins" in agent_docs["docs/QUICKSTART.md"])
 

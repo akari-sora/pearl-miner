@@ -54,6 +54,7 @@ CLEAN_STOP_RES = [re.compile(p) for p in (
     r"day \d+ budget full \(", r"tx reverted and the day budget is full$", r"gas budget [0-9.]+ BNB reached\b",
     r"no budget left; only tracking earlier transactions$", r"BNB [0-9.]+ minus in-flight fees would drop under keep ",
     r"deadline$", r"chain moved past day \d+$", r"None$")]
+CRASH_RE = re.compile(r"\bcrash in \w+: ")  # pearl_submit.py's line when a worker crashed, even after a stop
 LOCKED_TEXT = "another run already holds"  # pearl_submit.py's refusal when the journal is locked
 DECIMALS = 8
 TAIL_S = 0.2          # how often the log is read while a child runs
@@ -299,8 +300,10 @@ def stream_child(cmd, log_path, pid_path=None, second_code=EXIT_RUN):
 
 # ---------------------------------------------------------------- pieces of the plan
 def sale_plan(before, after, mined, max_reward, fraction):
-    """(keep, max_sell) in raw units: sell at most `fraction` of min(after - before, mined x max_reward), so coins
-    that came in from elsewhere while the run waited are never sold; int() truncates, never more."""
+    """(keep, max_sell) in raw units: sell at most `fraction` of min(after - before, mined x max_reward); int()
+    truncates, never more. max_reward is an upper bound read before the start, so of the coins held before or sent
+    from elsewhere at most `fraction` x mined x (max_reward - the real reward) can be sold: a few percent of what the
+    run earned, at most."""
     new = max(0, min(after - before, mined * max_reward))
     max_sell = int(Decimal(new) * Decimal(str(fraction)))
     return after - max_sell, max_sell
@@ -343,8 +346,10 @@ def sell_text(a):
            "or waits." if a.sell == "now" else
            "trail: after the run, watch the price for up to 120 minutes and sell on a 7% pullback from its high or "
            "when sales fall behind schedule.")
-    return [how, f"Sells at most {pct} of the coins THIS run mines (never more than its proofs can have earned); "
-                 f"the rest and every coin you held before the run stay in the wallet.",
+    return [how, f"Sells at most {pct} of what THIS run's proofs can have earned (proofs mined x the reward read "
+                 f"before the start, which only falls);",
+            f"coins you held before stay, apart from at most {pct} of the gap between that bound and what the proofs "
+            f"really earned.",
             "Only after a normal end (cap full, budget spent, proofs used up, deadline): never after STOP, Ctrl-C,",
             "a crash, a risk warning or an error."]
 
@@ -484,10 +489,10 @@ def cmd_auto(a):
         out(f"\n--plan: nothing was sent. To start this plan, run the same command without --plan and with "
             f"--day {day}.")
         return EXIT_OK
-    if warnings and a.yes and not a.allow_used_elsewhere:
+    if warnings and (a.yes or not stdin_is_tty()) and not a.allow_used_elsewhere:
         raise Refusal(EXIT_REFUSED, "check printed a WARNING (proofs already used on chain but not in the journal: "
-                                    "a lost journal, or another machine sending): --yes needs --allow-used-elsewhere "
-                                    "too; nothing was sent")
+                                    "a lost journal, or another machine sending): an answer given beforehand (--yes, "
+                                    "or a yes from a pipe) needs --allow-used-elsewhere too; nothing was sent")
     if a.yes:
         out("--yes given: the plan was decided beforehand, starting.")
     else:
@@ -507,14 +512,10 @@ def cmd_auto(a):
             sale_block = "the token balance before the run did not read the same twice"
             out(f"WARNING: {sale_block}: the sale will be skipped. Sell later with submit/pearl_sell.py.")
         else:
-            out(f"token balance before the run: {coins(before)} coins (these are kept)")
+            out(f"token balance before the run: {coins(before)} coins")
         max_reward = max_reward_per_proof(day)
         out(f"highest reward one proof of this run can earn: {coins(max_reward)} coins")
     ready_to_start(P, ps)
-    old_pid = None
-    if os.path.exists(P.run_pid):
-        with open(P.run_pid, "rb") as f:
-            old_pid = f.read()
     out(f"\n==== run: output also in {short(P.run_log)}, process id in {short(P.run_pid)}; "
         f"stop any time: create {short(P.stop)} or press Ctrl-C ====")
     STATE["phase"] = "run"
@@ -525,12 +526,11 @@ def cmd_auto(a):
     STATE["phase"] = "after"
     m = next((m for m in map(SUMMARY_RE.search, reversed(lines)) if m), None)
     logs = f"logs: {short(P.run_log)}, {short(P.journal)}"
-    if not m and any(LOCKED_TEXT in x for x in lines):  # another submitter has the journal: give its run.pid back
-        if old_pid is None:
+    if not m and any(LOCKED_TEXT in x for x in lines):  # another submitter has the journal and ours never ran:
+        try:                                               # no run.pid at all, so the seller refuses (fail closed)
             os.remove(P.run_pid)
-        else:
-            with open(P.run_pid, "wb") as f:
-                f.write(old_pid)
+        except OSError:
+            pass
     if not m or rc != 0:
         last = next((x for x in reversed(lines) if x.strip()), "no output")
         what = "without a SUMMARY line" if not m else "with an error after its SUMMARY line"
@@ -551,6 +551,8 @@ def cmd_auto(a):
             sale_block = f"{short(P.stop)} exists"
         elif not clean_stop(stop):
             sale_block = f"the run did not end normally ({stop})"
+        elif any(CRASH_RE.search(x) for x in lines):
+            sale_block = ("the run reported a crash: " + next(x for x in lines if CRASH_RE.search(x)).strip()[:160])
         if sale_block is None and mined == 0:
             sold_line = "nothing to sell: this run mined no proofs"
         elif sale_block is None:
@@ -574,12 +576,15 @@ def cmd_auto(a):
                              if sm else "no end line from the seller")
                 if src != 0 or s_int:
                     last = next((x for x in reversed(slines) if x.strip()), "no output")
-                    code, reason = EXIT_SALE, f"the seller stopped (exit {src}): {last.strip()[:200]}"
+                    code, reason = EXIT_SALE, (f"the seller stopped before it was done (exit {src}): "
+                                               f"{last.strip()[:200]}. Some coins may be sold already: check "
+                                               f"python3 pearl.py status and {short(P.sell_log)} before selling more")
         if sale_block:
             sold_line = f"skipped: {sale_block}"
-            code, reason = EXIT_SALE, (f"sale skipped: {sale_block}. To sell later: "
-                                       + sell_later_cmd(P, before, mined, max_reward or day_start_reward(day),
+            later = ("This run mined no proofs, so there is nothing of it to sell." if mined == 0 else
+                     "To sell later: " + sell_later_cmd(P, before, mined, max_reward or day_start_reward(day),
                                                         a.sell_fraction, after))
+            code, reason = EXIT_SALE, f"sale skipped: {sale_block}. {later}"
         logs += f", {short(P.sell_log)}, {short(P.sell_journal)}"
 
     # 5. summary
@@ -642,7 +647,7 @@ def main(argv=None):
     au.add_argument("--sell", choices=("now", "trail", "off"), default="now",
                     help="now: sell right after the run (default); trail: watch the price up to 2 h; off: no sale")
     au.add_argument("--sell-fraction", type=float, default=0.8,
-                    help="share of the coins THIS run mines to sell (default 0.8); older coins are never sold")
+                    help="share of what THIS run's proofs can have earned to sell at most (default 0.8)")
     au.add_argument("--minutes", type=float, default=90, help="stop this many minutes after the opening (default 90)")
     au.add_argument("--yes", action="store_true",
                     help="skip the question; only if you decided this plan yourself beforehand")

@@ -27,8 +27,11 @@ Rules this script enforces:
 - after a swap it polls `market-order list --orderId` to FINISHED / FAILED; an order still PENDING or with an
   unreadable status stops the script (state unknown: never resubmit blindly);
 - progress is measured from the on-chain token balance, never from assumed fills;
-- a STOP file next to this script, Ctrl-C, SIGTERM or (Windows) Ctrl-Break stops it between steps: an order
-  already placed is followed to FINISHED / FAILED and journaled first; everything is journaled to sell.jsonl;
+- a STOP file next to this script, Ctrl-C, SIGTERM or (Windows) Ctrl-Break stops it between steps (also during
+  a wait): an order already placed is followed to FINISHED / FAILED and journaled first; everything is journaled
+  to sell.jsonl;
+- the exit code is 0 only when the sale is done (nothing sellable left above the kept part, or --max-sell-coins
+  reached) and the end balance was read; any other stop exits non-zero after the end record;
 - --max-sell-coins caps what this session sells, whatever the balance reads later (coins that arrive from
   elsewhere are never sold beyond it).
 
@@ -70,16 +73,22 @@ def sleep(sec):
 
 
 SIGNALLED = [False]  # set by Ctrl-C / SIGTERM / Ctrl-Break; the loop stops at its next STOP check
+STOP_FILE = [None]   # set by cmd_run: the STOP file cuts a pause short too
 
 
 def on_signal(signum, frame):
     SIGNALLED[0] = True
 
 
+def stopping():
+    return SIGNALLED[0] or bool(STOP_FILE[0] and os.path.exists(STOP_FILE[0]))
+
+
 def pause(sec):
-    """A wait between steps that a signal cuts short (an order in flight is never waited on with this)."""
+    """A wait between steps that a signal or the STOP file cuts short (an order in flight is never waited on with
+    this)."""
     end = now() + sec
-    while not SIGNALLED[0] and now() < end:
+    while not stopping() and now() < end:
         sleep(min(1.0, end - now()))
 
 
@@ -294,6 +303,7 @@ def cmd_run(a):
 def _cmd_run(a):
     j = Journal(a.journal)
     stop_file = os.path.join(HERE, "STOP")
+    STOP_FILE[0] = stop_file
     global SLIPPAGE
     SLIPPAGE = str(a.slippage)
     signed_in = baw_wallet_address()  # balances are read for WALLET, swaps go out from the signed-in wallet
@@ -328,6 +338,8 @@ def _cmd_run(a):
     if not a.dry_run:
         for _ in range(10):
             pause(30)
+            if stopping():
+                break
             try:
                 b2 = token_balance()
             except RuntimeError as e:
@@ -340,8 +352,8 @@ def _cmd_run(a):
             low[0] = b2
         else:
             raise SystemExit("the token balance keeps changing: is something still sending?")
-        if SIGNALLED[0]:
-            raise SystemExit("stopped by a signal before any sale")
+        if stopping():
+            raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} before any sale")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor = None, None, 0
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
@@ -389,6 +401,7 @@ def _cmd_run(a):
     if prev is not None:  # the schedule continues from the first run
         t_start = float(prev.get("t", t_start))
         start_sellable = max(1, int(prev["start_bal"]) - keep)
+    done = False  # only the two normal ends set it; any other stop makes the script exit non-zero
     while True:
         if os.path.exists(stop_file) or SIGNALLED[0]:
             say("STOP file: stopping" if os.path.exists(stop_file) else "signal (Ctrl-C / SIGTERM): stopping")
@@ -406,6 +419,7 @@ def _cmd_run(a):
         sellable = (bal - keep) // 10 ** DECIMALS  # whole coins above the kept part
         if sellable < a.dust:
             say(f"done: {sellable:,} coins left above the kept {keep / 10 ** DECIMALS:,.0f}")
+            done = True
             break
         ref, rj = quote(REF_QTY)
         if ref is None:
@@ -440,6 +454,7 @@ def _cmd_run(a):
             qty = min(qty, (max_sell - sold_req) // 10 ** DECIMALS)
             if qty < 1:
                 say(f"--max-sell-coins {a.max_sell_coins} reached: done")
+                done = True
                 break
         out, qj = quote(qty)
         j.write(ev="quote", qty=qty, ref=str(ref), out=str(out), resp=qj, reason=reason)
@@ -547,9 +562,13 @@ def _cmd_run(a):
         end_bal = balance()
         say(f"end balance {end_bal / 10 ** DECIMALS:,.2f} 珍珠币 (sold {(start_bal - end_bal) / 10 ** DECIMALS:,.2f}); "
             f"BNB from finished orders ≈ {total_bnb}")
-        j.write(ev="end", end_bal=end_bal, bnb=str(total_bnb), args={"dry_run": a.dry_run})
+        j.write(ev="end", end_bal=end_bal, bnb=str(total_bnb), done=done, args={"dry_run": a.dry_run})
     except RuntimeError as e:
         say(e)
+        raise SystemExit(f"the end balance is unreadable ({e}): check the balance and {a.journal} before selling more")
+    if not done:  # STOP, a signal, or an error stopped the sale part way: some coins may be sold already
+        raise SystemExit(f"stopped before the sale was done (see the line above); some coins may be sold already: "
+                         f"check the balance and {a.journal} before selling more")
 
 
 def coins_value(s):

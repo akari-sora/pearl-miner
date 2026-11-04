@@ -22,9 +22,10 @@ every hex value of 4+ digits (tx hashes, your address) masked, block numbers and
 rounded and the temp work dir hidden; the rules of tools/replay_log.py --anonymize. The day before the target is set
 full on the fork before the opening, so nothing can be mined early.
 
---autopilot runs the one-command path instead, as you would on the day: `pearl.py auto --day N --sell off`, its
-question answered with yes as an agent pipes it (not --yes, so a check WARNING is shown in the plan and does not
-refuse), with check and run as child processes (fork_submit.py points them at the fork). --journal copies an earlier
+--autopilot runs the one-command path instead, as you would on the day: `pearl.py auto --day N --sell off
+--allow-used-elsewhere`, its question answered with yes as an agent pipes it. A check WARNING (proofs used without
+this journal, as in a rehearsal without --journal) is shown in the plan; --allow-used-elsewhere lets the rehearsal go
+on, as the user would after reading it. Check and run are child processes (fork_submit.py points them at the fork). --journal copies an earlier
 journal.jsonl into the work dir, so proofs sent on earlier days are skipped as in a real later-day run.
 """
 import argparse
@@ -129,8 +130,8 @@ def main():
     ap.add_argument("--day", type=int, default=None, help="day to open on the fork (default: the next one)")
     ap.add_argument("--port", default=PORT, help="local anvil port, must be free (env PEARL_FORK_PORT; default 8547)")
     ap.add_argument("--autopilot", action="store_true",
-                    help="run `pearl.py auto --day N --sell off`, answering its question with yes (check + run as child "
-                         "processes) instead of the submitter")
+                    help="run `pearl.py auto --day N --sell off --allow-used-elsewhere`, answering its question with yes "
+                         "(check + run as child processes) instead of the submitter")
     ap.add_argument("--budget-bnb", default=None,
                     help="gas budget passed on (default: the submitter's 0.045 BNB, earlier runs in the journal included)")
     ap.add_argument("--journal", default=None, help="an earlier journal.jsonl to copy in, so proofs sent before are "
@@ -286,7 +287,8 @@ def main():
                 print(prompt + "yes   (answered by run_fork.py)", flush=True)
                 return "yes"
             pearl.read_answer = answer_yes
-            rc = pearl.main(["auto", "--sell", "off", "--day", str(target), "--minutes", str(a.minutes),
+            rc = pearl.main(["auto", "--sell", "off", "--allow-used-elsewhere", "--day", str(target),
+                             "--minutes", str(a.minutes),
                              "--dir", work] + (["--budget-bnb", str(a.budget_bnb)] if a.budget_bnb else []))
         else:
             sys.argv = ["pearl_submit.py", "run", "--day", str(target), "--proofs", proofs, "--journal", journal,

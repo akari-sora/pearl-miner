@@ -1049,6 +1049,22 @@ def _main():
     expect("D5: the earlier SIGINT handler is back afterwards", sigint_after is signal.default_int_handler)
     ps.MIN_REWARD_PER_PROOF = keep
 
+    # N6: a worker crash is always on the output, also when an earlier stop reason stands (stop() keeps only the
+    # first one): pearl.py looks for that line and never sells after it
+    said, saved_say = [], ps.say
+    ps.say = lambda *x: said.append(" ".join(str(v) for v in x))
+    stops6 = []
+    fake6 = types.SimpleNamespace(j=types.SimpleNamespace(write=lambda **k: None), stop=stops6.append)
+
+    def tracker():
+        raise KeyError("x")
+    try:
+        ps.Runner.guarded(fake6, tracker)
+    finally:
+        ps.say = saved_say
+    expect("N6: a worker crash is printed as 'crash in tracker: ...' even when stop() keeps an earlier reason",
+           any(x.startswith("crash in tracker: KeyError") for x in said) and stops6 == ["crash in tracker: KeyError('x')"])
+
     print(f"[summary] {checks[0]} checks")
     print("FAILED:", fails if fails else "none")
     return 1 if fails else 0

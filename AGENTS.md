@@ -38,7 +38,7 @@ yourself unless the user asks: `pearl.py` sets up `run.pid`, the logs and the am
    `echo yes | nohup python3 pearl.py auto --day N ...`). pearl.py refuses a piped yes without `--day`. After
    exit 3, ask again before any rerun; if that day's window is over, do not rerun.
 5. **`--yes`** only when the user wrote the strategy themselves and told you to use it. `--allow-used-elsewhere`
-   (needed with `--yes` after a check `WARNING`) only when the user decides so.
+   (needed with `--yes` or a piped yes after a check `WARNING`) only when the user decides so.
 6. **Stopping.** Create `submit/STOP` (the miner: `miner/STOP`). Do not kill processes to stop a run. Do not
    delete `journal.jsonl`, `run.pid` or a `STOP` file unless the user asks.
 7. **Settings.** Do not change defaults or limits (gas budget, keep reserve, sell fraction, minimum reward) on

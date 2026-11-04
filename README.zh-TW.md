@@ -27,7 +27,7 @@
 python3 pearl.py auto
 ```
 
-它會檢查錢包和 proof、列出計畫（開放時間、Gas 上限、賣出比例），你輸入 `yes` 之後就不用管：等到開放、自動送單、額度滿了自動停，再自動賣出這次新挖到幣的最多 80%（`--sell off` 可關閉；只在正常結束時才賣，原本持有的幣不會被賣）。
+它會檢查錢包和 proof、列出計畫（開放時間、Gas 上限、賣出比例），你輸入 `yes` 之後就不用管：等到開放、自動送單、額度滿了自動停，再自動賣出這次新挖到幣的最多 80%（`--sell off` 可關閉；只在正常結束時才賣，而且最多只賣本次 proof 可能賺到的上限的 80%：挖到的 proof 數 × 開始前讀到的獎勵，這是上限，所以原本持有的幣最多只會被賣到這個上限與實際獎勵之差的 80%）。
 
 - 新手照做：[docs/QUICKSTART.zh-TW.md](docs/QUICKSTART.zh-TW.md)
 - 交給 AI Agent（Claude Code、Codex、Grok Bot 等）：[docs/AGENTS-SETUP.zh-TW.md](docs/AGENTS-SETUP.zh-TW.md)，skill 在 [skills/pearl-miner/SKILL.md](skills/pearl-miner/SKILL.md)
@@ -453,7 +453,7 @@ python3 pearl.py auto
 - **不確定就停，不猜**：preview 有任何風險提示、無法解釋的模擬失敗、gas 預算用完、`STOP` 檔或截止時間，都會乾淨地停下。
 - **接近額度上限時自動切小批**，不讓整筆 16 個 proof 的交易 revert。
 - **完全沒有私鑰**：幣安 Agentic Wallet 是 MPC 錢包，工具只操作它的 CLI。
-- **上主網前先驗證**：六套離線測試（送單器 **87 項**、賣出器 **85 項**、紀錄去識別化 **38 項**、一行指令 `pearl.py` **129 項**、礦機批次大小調整 **15 項**、`pearl.py` 端對端（真的訊號）**31 項**），在 macOS、Linux 和 Windows 上都跑過（[PLATFORMS.zh-TW.md](docs/PLATFORMS.zh-TW.md)），以及在真合約分叉上的完整模擬（現場換日、對手吃額度）。
+- **上主網前先驗證**：六套離線測試（送單器 **88 項**、賣出器 **90 項**、紀錄去識別化 **38 項**、一行指令 `pearl.py` **137 項**、礦機批次大小調整 **17 項**、`pearl.py` 端對端（真的訊號）**35 項**），在 macOS、Linux 和 Windows 上都跑過（[PLATFORMS.zh-TW.md](docs/PLATFORMS.zh-TW.md)），以及在真合約分叉上的完整模擬（現場換日、對手吃額度）。
 - **送單器與賣出器只用 Python 標準函式庫**：把 `pearl_submit.py`（以及會引用它的地址檢查的 `pearl_sell.py`）複製到有錢包 session 的機器上即可。
 
 ### 運作流程圖
@@ -484,7 +484,7 @@ flowchart LR
 
 ![anvil 分叉模擬](demo/simulation.gif)
 
-**離線測試**：送單器對假鏈與假 `baw`（87 項檢查）；賣出器對依真實池子校準的流動性模型（85 項檢查）；紀錄去識別化規則（38 項檢查）；`pearl.py` 搭配假的子程式（129 項檢查）；礦機批次大小調整（15 項檢查）；以及 `pearl.py` 搭配真的送單器與賣出器、假的鏈與市場，用 STOP 和真的 Ctrl-C 停止（31 項檢查）。清單與執行方式見 [docs/QUICKSTART.zh-TW.md](docs/QUICKSTART.zh-TW.md#自己檢查程式選用)。（[MP4](demo/tests.mp4)）
+**離線測試**：送單器對假鏈與假 `baw`（88 項檢查）；賣出器對依真實池子校準的流動性模型（90 項檢查）；紀錄去識別化規則（38 項檢查）；`pearl.py` 搭配假的子程式（137 項檢查）；礦機批次大小調整（17 項檢查）；以及 `pearl.py` 搭配真的送單器與賣出器、假的鏈與市場，用 STOP 和真的 Ctrl-C 停止（35 項檢查）。清單與執行方式見 [docs/QUICKSTART.zh-TW.md](docs/QUICKSTART.zh-TW.md#自己檢查程式選用)。（[MP4](demo/tests.mp4)）
 
 ![兩套離線測試全部通過](demo/tests.gif)
 
@@ -496,18 +496,18 @@ flowchart LR
 pearl.py               一天只要一行指令：check、計畫、yes、送單、賣出
 AGENTS.md              給 AI agent 的規則（CLAUDE.md 和 GEMINI.md 會匯入它）
 skills/pearl-miner/    pearl-miner skill（SKILL.md，單檔即可使用）
-miner/                 OpenCL 礦機（miner.py、keccak_miner.cl、requirements.txt、test_autotune.py：15 項檢查）
+miner/                 OpenCL 礦機（miner.py、keccak_miner.cl、requirements.txt、test_autotune.py：17 項檢查）
 submit/
   pearl_submit.py      送單器：check / rehearse / run
   export_proofs.py     proofs.csv -> 驗證後的 proofs.json
   pearl_sell.py        賣出器：plan / run [--dry-run]
-  test_submit.py       送單器離線測試（87 項檢查）
-  test_sell.py         賣出器離線測試（85 項檢查）
+  test_submit.py       送單器離線測試（88 項檢查）
+  test_sell.py         賣出器離線測試（90 項檢查）
   fork_rehearsal/      anvil 分叉模擬與假 baw（只連 127.0.0.1）
 tools/replay_log.py    依原始節奏重播送單紀錄（去除可識別資訊）
 tools/test_replay_log.py  去識別化的離線測試（38 項檢查）
-tools/test_pearl_autopilot.py  pearl.py 的離線測試（129 項檢查）
-tools/test_pearl_e2e.py  pearl.py 端對端：真的送單器與賣出器、真的訊號（31 項檢查）
+tools/test_pearl_autopilot.py  pearl.py 的離線測試（137 項檢查）
+tools/test_pearl_e2e.py  pearl.py 端對端：真的送單器與賣出器、真的訊號（35 項檢查）
 demo/                  vhs 腳本、GIF / MP4、去識別化的第 1 天紀錄
 docs/                  QUICKSTART、AGENTS-SETUP、PLATFORMS、CONTRACT.md、ARCHITECTURE.md
 ```

@@ -102,7 +102,8 @@ Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run th
         earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
 Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
-        Sells at most 80% of the coins THIS run mines (never more than its proofs can have earned); the rest and every coin you held before the run stay in the wallet.
+        Sells at most 80% of what THIS run's proofs can have earned (proofs mined x the reward read before the start, which only falls);
+        coins you held before stay, apart from at most 80% of the gap between that bound and what the proofs really earned.
         Only after a normal end (cap full, budget spent, proofs used up, deadline): never after STOP, Ctrl-C,
         a crash, a risk warning or an error.
 ```
@@ -113,7 +114,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | Proofs | 還能用的 proof 數量。之前已送過的會自動跳過。 |
 | Gas | 這次最多能花多少 gas。上限是同一份 journal 所有執行的累計，所以計畫會列出今天還剩多少（見下方）。 |
 | Keep reserve | 永遠留在錢包裡的 BNB。 |
-| Sell | 挖完之後做什麼，而且只在正常結束時才賣。只賣這次挖到的幣，最多是列出的比例，也絕不超過這次的 proof 可能賺到的量，所以期間從別處轉入的幣不會被賣。 |
+| Sell | 挖完之後做什麼，而且只在正常結束時才賣。最多賣出這次的 proof 可能賺到的量（開始前讀到的獎勵是上限）乘上列出的比例，也不超過餘額增加的量。原本持有的幣或期間轉入的幣，最多只會被賣到「上限與實際獎勵之差」乘上這個比例，頂多是這次收益的幾個百分點。 |
 
 輸入 `yes` 就是事先核准這份計畫：之後的送單交易與賣出都會透過 `baw` 送出，不會再問你。這是你對本計畫的預先核准，
 不是 Binance App 內逐筆的確認；Binance 是否接受由 Binance 決定。這也不代表 Binance 同意無人值守的使用方式，用程式操作
@@ -129,11 +130,11 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | `--sell now` | `now` | 送單結束就賣。第 1 天開放後價格跌得很快。 |
 | `--sell trail` | | 最多觀察價格 2 小時，從高點回落 7% 或進度落後時分批賣。 |
 | `--sell off` | | 不賣。 |
-| `--sell-fraction F` | `0.8` | 這次挖到的幣要賣掉的比例。之前就有的幣永遠不會賣。 |
+| `--sell-fraction F` | `0.8` | 最多賣掉這次 proof 可能賺到的量的多少比例。 |
 | `--minutes M` | `90` | 開放後幾分鐘停止。 |
 | `--plan` | | 跑 `check` 並列出計畫後就結束，不送出任何東西。 |
-| `--yes` | | 不問就開始。只在計畫是你自己事先決定的時候使用。check 印出 WARNING 時會被拒絕。 |
-| `--allow-used-elsewhere` | | check 警告有 proof 鏈上已用、但 journal 沒有紀錄時（journal 遺失，或另一台機器也在送），仍讓 `--yes` 開始。 |
+| `--yes` | | 不問就開始。只在計畫是你自己事先決定的時候使用。check 印出 WARNING 時會被拒絕，用管線送的 yes 也一樣。 |
+| `--allow-used-elsewhere` | | check 警告有 proof 鏈上已用、但 journal 沒有紀錄時（journal 遺失，或另一台機器也在送），仍讓 `--yes` 或管線送的 yes 開始。 |
 
 ### gas 上限是跨天累計的
 
@@ -154,7 +155,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | 0 | 完成。 | 不用做什麼。 |
 | 1 | 送出任何東西之前就拒絕了。 | 看那一行原因，修好後重新開始。 |
 | 3 | 送單沒有乾淨結束：沒有總結，或總結之後出錯。 | 先 `python3 pearl.py status`。如果那一天的時段還沒過，帶上計畫裡的 `--day N` 重新開始：journal 會擋住可能已送出的 proof，不會重複送。 |
-| 4 | 送單結束了，但賣出被跳過或中途停止（STOP、Ctrl-C、送單不是正常結束、讀不到餘額）。 | 訊息最後會印出之後補賣的指令，`--keep-coins` 和 `--max-sell-coins` 都已算好填上。準備好時執行它。 |
+| 4 | 送單結束了，但賣出被跳過（STOP、Ctrl-C、送單不是正常結束、讀不到餘額），或賣出器還沒賣完就停了。 | 賣出被跳過時：訊息最後會印出之後補賣的指令，`--keep-coins` 和 `--max-sell-coins` 都已算好填上（這次沒挖到就不會印；送單前讀不到餘額時，會說明 `--keep-coins` 怎麼選）。準備好時執行它。賣出器中途停止時：可能已經賣掉一部分，先看 `python3 pearl.py status` 和 `submit/sell.log` 再決定要不要補賣。 |
 
 ## 自己檢查程式（選用）
 

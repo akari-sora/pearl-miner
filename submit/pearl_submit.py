@@ -1634,6 +1634,7 @@ class Runner:
             fn(*args)
         except Exception as e:  # a crash in any worker stops the whole run instead of stalling it
             self.j.write(ev="crash", where=fn.__name__, error=repr(e), tb=traceback.format_exc()[-2000:])
+            say(f"crash in {fn.__name__}: {e!r}")  # always on the output, also when an earlier stop reason stands
             self.stop(f"crash in {fn.__name__}: {e!r}")
 
     def finished(self):

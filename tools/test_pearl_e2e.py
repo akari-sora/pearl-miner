@@ -133,7 +133,7 @@ d, repo = os.environ["E2E_DIR"], os.environ["E2E_REPO"]
 sys.path.insert(0, os.path.join(repo, "submit"))
 import pearl_sell as ps
 COIN, RATE, DEPTH = 10 ** 8, 1 / 431426, 1_300_000
-orders, clock = {}, [1_800_000_000.0]
+orders, clock, after_fill = {}, [1_800_000_000.0], [0]
 
 
 def record(**rec):
@@ -191,6 +191,10 @@ def token_balance():
         with open(late) as f:
             put(get() + sum(int(x) for x in f.read().split()))
         os.remove(late)
+    if os.environ.get("E2E_STRANGER") and any("bnb" in o for o in orders.values()):
+        after_fill[0] += 1
+        if after_fill[0] == 2:  # the seller has seen its first order's coins leave; 50,000 from elsewhere land now
+            put(get() + 50_000 * COIN)
     return get()
 
 
@@ -215,14 +219,12 @@ def baw(args, timeout=60):
         oid = str(1000 + len(orders))
         orders[oid] = {"qty": q, "polls": 0}
         record(script="swap", qty=q, order=oid)
-        if os.environ.get("E2E_SELL_HOLD"):  # the order is in flight: the test presses Ctrl-C now
+        if os.environ.get("E2E_SELL_HOLD"):  # the order is in flight: the test presses Ctrl-C or creates STOP now
             open(os.path.join(d, "order_in_flight"), "w").close()
             for _ in range(500):
-                if signalled():
+                if signalled() or os.path.exists(os.path.join(os.environ["E2E_DATA"], "STOP")):
                     break
                 time.sleep(0.02)
-        if os.environ.get("E2E_STRANGER") and len(orders) == 1:  # 50,000 coins from elsewhere land meanwhile
-            put(get() + 50_000 * COIN)
         return {"success": True, "data": {"orderId": oid}}
     if cmd == ["market-order", "list"] and "--status" in args:
         return {"success": True, "data": {"total": 0, "list": []}}
@@ -261,6 +263,7 @@ SCENARIOS = {  # name: extra environment
     "unclean": {"E2E_RISK_AFTER": "1"},
     "late": {"E2E_LATE": "1", "E2E_STRANGER": "1"},
     "ctrlc-sale": {"E2E_SELL_HOLD": "1"},
+    "stop-sale": {"E2E_SELL_HOLD": "1"},
 }
 
 
@@ -346,6 +349,9 @@ def one(scenario, work):
         elif scenario == "ctrlc-sale":
             if wait_for(lambda: os.path.exists(os.path.join(work, "order_in_flight"))):
                 ctrl_c(work)
+        elif scenario == "stop-sale":
+            if wait_for(lambda: os.path.exists(os.path.join(work, "order_in_flight"))):
+                open(os.path.join(data, "STOP"), "w").close()
     threading.Thread(target=act, daemon=True).start()
     rc = pearl.main(["auto", "--day", "1", "--minutes", "1", "--dir", data, "--csv", os.path.join(work, "none.csv")])
     with open(os.path.join(work, "rc.txt"), "w") as f:
@@ -432,9 +438,10 @@ def outer():
                 continue
             argv = sells[0]["argv"] if sells else []
             arg = (lambda n: argv[argv.index(n) + 1] if n in argv else None)
-            expect(f"{scenario}: run.pid names the real submitter (or its venv launcher); it has exited afterwards",
+            expect(f"{scenario}: run.pid names the real submitter (on Windows maybe its venv launcher); it has exited afterwards",
                    runc is not None and rd(os.path.join("data", "run.pid")) is not None
-                   and int(rd(os.path.join("data", "run.pid"))) in (runc["pid"], runc["ppid"])
+                   and int(rd(os.path.join("data", "run.pid"))) in ((runc["pid"], runc["ppid"]) if os.name == "nt"
+                                                                     else (runc["pid"],))
                    and rd("alive_after.txt") == "False", (runc, rd(os.path.join("data", "run.pid")), rd("alive_after.txt")))
             expect(f"{scenario}: never 'nothing was sent' once the run started", "nothing was sent" not in out + err)
             if scenario == "full":
@@ -457,7 +464,8 @@ def outer():
             elif scenario == "stop":
                 expect("stop: a real STOP file ends the run with a SUMMARY (stop=STOP file); no sale, exit 4",
                        stop == "STOP file" and rc == "4" and not sells and "STOP exists" in err, (stop, rc, err[-300:]))
-                expect("stop: exit 4 gives the command to sell later", "pearl_sell.py run --mode now --keep-coins" in err)
+                expect("stop: STOP before the opening, nothing mined: no sell command (never --max-sell-coins 0)",
+                       mined == 0 and "mined no proofs" in err and "pearl_sell.py run" not in err, (mined, err[-300:]))
             elif scenario == "ctrlc-run":
                 expect(f"ctrlc-run: a real Ctrl-C reaches the submitter as {sig_name}, once",
                        sigs == [f"submit {int(want_sig)}"], sigs)
@@ -493,6 +501,15 @@ def outer():
                        "record", len(swaps) == 1 and "filled" in evs and evs[-1:] == ["end"], (swaps, evs))
                 expect("ctrlc-sale: exit 4 with the summary", rc == "4" and "==== summary ====" in out
                        and "seller stopped" in err, (rc, err[-300:]))
+            elif scenario == "stop-sale":
+                evs = [json.loads(x) for x in (rd(os.path.join("data", "sell.jsonl")) or "").splitlines() if x.strip()]
+                expect("stop-sale: STOP while an order is in flight: the order is followed to its end, no second "
+                       "order, an end record marked not done", len(swaps) == 1 and any(r.get("ev") == "filled" for r in evs)
+                       and evs[-1:] and evs[-1].get("ev") == "end" and evs[-1].get("done") is False and not sigs,
+                       (swaps, [r.get("ev") for r in evs], sigs))
+                expect("stop-sale: the seller exits non-zero, so pearl.py exits 4 and says coins may be sold already",
+                       rc == "4" and "seller stopped before it was done" in err and "Some coins may be sold already" in err,
+                       (rc, err[-400:]))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     print("FAILED:", failed or "none", flush=True)

@@ -72,8 +72,10 @@ class Env:
                  partial=False, dump_after=None, swap_timeout=False, pending_exists=False, full_refund=False,
                  stale_reads=0, no_actual_qty=False, nan_quotes=0, bnb=0.04, swap_reply=None, alternate_stale=False,
                  outlier_at=None, flaky_every=0, pending_after=None, pending_unreadable=0, signed_in=None,
-                 signal_after_swaps=None, signal_on_read=None):
+                 signal_after_swaps=None, signal_on_read=None, stop_on_read=None, stop_after_swaps=None):
         self.signal_after_swaps, self.signal_on_read = signal_after_swaps, signal_on_read  # Ctrl-C at that point
+        self.stop_on_read, self.stop_after_swaps = stop_on_read, stop_after_swaps  # the STOP file appears then
+        self.fail_reads_if = None  # a callable: while it is true, balance reads fail
         self.signed_in = os.environ["PEARL_WALLET"] if signed_in is None else signed_in  # baw wallet address
         self.pending_unreadable = pending_unreadable
         self.swap_reply, self.alternate_stale, self.outlier_at = swap_reply, alternate_stale, outlier_at
@@ -143,6 +145,8 @@ class Env:
             self.swaps.append(qty)
             if self.signal_after_swaps and len(self.swaps) >= self.signal_after_swaps:
                 ps.on_signal(2, None)  # Ctrl-C while this order is in flight
+            if self.stop_after_swaps and len(self.swaps) >= self.stop_after_swaps:
+                open(os.path.join(ps.HERE, "STOP"), "w").close()  # STOP while this order is in flight
             self.orders[oid] = {"qty": qty, "polls": 0}
             return {"success": True, "data": {"orderId": oid}}
         if cmd == ["market-order", "list"] and "--status" in args:
@@ -202,6 +206,10 @@ def run(name, env, argv, run_alive=False, stop_file=False, no_pid=False, tmp=Non
         env.bal_hist.append(env.bal)
         if env.signal_on_read and len(env.bal_hist) == env.signal_on_read:
             ps.on_signal(2, None)
+        if env.stop_on_read and len(env.bal_hist) == env.stop_on_read:
+            open(os.path.join(ps.HERE, "STOP"), "w").close()
+        if env.fail_reads_if and env.fail_reads_if():
+            raise RuntimeError("token balance unreadable: test")
         if env.alternate_stale:  # two nodes behind a load balancer: every other read is a minute old
             env.flip = not env.flip
             old = env.bal_hist[max(0, len(env.bal_hist) - 40)]
@@ -438,7 +446,8 @@ expect("no orderId: exactly one swap", e.swaps == [100_000])
 # 37. error given as a string: no crash, stop
 e = Env(300_000, swap_reply={"success": False, "error": "boom"})
 err = run("string error", e, ["run", "--mode", "now"])
-expect("string error: no crash, one swap", err is None and e.swaps == [100_000])
+expect("string error: no crash (a stop message, not a traceback), one swap",
+       err is not None and "stopped before the sale was done" in err and e.swaps == [100_000])
 
 # 38. two RPC nodes alternate (one a minute behind): the low-watermark never oversells
 e = Env(300_000, alternate_stale=True)
@@ -676,6 +685,45 @@ try:
 finally:
     ps._submit.start_baw, ps._submit.finish_baw = saved_start, saved_finish
 expect("D4: baw runs with own_group=True", seen.get("own_group") is True and r.get("success") is True)
+
+# 66b. only a finished sale exits 0: STOP, a signal or an error part way exits non-zero, after the end record
+tmpd = tempfile.mkdtemp(prefix="sell-stopmid-")
+e = Env(300_000, stop_after_swaps=1)
+err = run("STOP during the first order", e, ["run", "--mode", "now"], tmp=tmpd)
+evs = journal_events(tmpd)
+expect("sell exit: STOP part way exits non-zero after following the order and writing end (done false)",
+       err is not None and "stopped before the sale was done" in err and e.swaps == [100_000]
+       and evs[-1].get("ev") == "end" and evs[-1].get("done") is False and any(r.get("ev") == "filled" for r in evs))
+e = Env(300_000, signal_after_swaps=1)
+err = run("signal during the first order (exit code)", e, ["run", "--mode", "now"])
+expect("sell exit: a signal part way exits non-zero", err is not None and "stopped before the sale was done" in err)
+e = Env(300_000)
+err = run("a full sale", e, ["run", "--mode", "now"])
+expect("sell exit: a sale that finished exits 0", err is None and sum(e.swaps) == 240_000)
+e = Env(300_000)
+said_done, real_say = [False], ps.say
+
+
+def say_hook(*x):
+    if any(str(v).startswith(("done:", "--max-sell-coins")) for v in x):
+        said_done[0] = True
+    real_say(*x)
+
+
+ps.say, e.fail_reads_if = say_hook, (lambda: said_done[0])
+try:
+    err = run("end balance unreadable", e, ["run", "--mode", "now"])
+finally:
+    ps.say = real_say
+expect("sell exit: the end balance unreadable after the sale exits non-zero",
+       said_done[0] and err is not None and "end balance is unreadable" in err and sum(e.swaps) == 240_000)
+
+# 66c. STOP while it waits for the balance to settle (30 s): stops at once, before any sale, non-zero
+e = Env(300_000, stop_on_read=1)
+t0 = CLOCK.now()
+err = run("STOP while settling", e, ["run", "--mode", "now"])
+expect("sell STOP: during the 30 s settling wait it stops at once, before any sale, non-zero",
+       err is not None and "STOP file before any sale" in err and e.swaps == [] and CLOCK.now() - t0 < 30)
 
 # 66. the seller's signal handlers are put back when it returns (an in-process caller keeps its Ctrl-C)
 expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is INITIAL_SIGINT)

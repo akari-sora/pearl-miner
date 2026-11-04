@@ -113,7 +113,8 @@ Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run th
         earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
 Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 2% price impact is halved or waits.
-        Sells at most 80% of the coins THIS run mines (never more than its proofs can have earned); the rest and every coin you held before the run stay in the wallet.
+        Sells at most 80% of what THIS run's proofs can have earned (proofs mined x the reward read before the start, which only falls);
+        coins you held before stay, apart from at most 80% of the gap between that bound and what the proofs really earned.
         Only after a normal end (cap full, budget spent, proofs used up, deadline): never after STOP, Ctrl-C,
         a crash, a risk warning or an error.
 ```
@@ -124,7 +125,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | Proofs | How many of your proofs can still be used. Proofs sent on an earlier day are skipped. |
 | Gas | The most gas the run may spend. The budget is a total for every run that uses the same journal, so the plan shows what is left for today (see below). |
 | Keep reserve | BNB that always stays in the wallet. |
-| Sell | What happens after mining, and only after a normal end. Only coins mined by this run are sold, at most the fraction shown, and never more than the proofs mined can have earned, so coins that arrive from elsewhere meanwhile are not sold. |
+| Sell | What happens after mining, and only after a normal end. At most the fraction shown of what the proofs mined can have earned (the reward read before the start is an upper bound), and never more than the balance grew. Coins you held before, or that arrive meanwhile, are sold only up to that fraction of the gap between the bound and the real reward: a few percent of the run's coins at most. |
 
 Typing `yes` approves this plan in advance: the mining transactions and the sales then go out through `baw`
 without asking you again. This is your advance approval of this plan, not the Binance App's confirmation of each
@@ -141,11 +142,11 @@ driving a wallet with scripts may break its terms. Anything other than `yes` can
 | `--sell now` | `now` | Sell right after the run ends. On day 1 the price fell fast after the opening. |
 | `--sell trail` | | Watch the price for up to 2 hours and sell on a 7% pullback from its high, or on schedule. |
 | `--sell off` | | Sell nothing. |
-| `--sell-fraction F` | `0.8` | Share of the coins mined by this run to sell. Coins you held before are never sold. |
+| `--sell-fraction F` | `0.8` | Share to sell, at most, of what this run's proofs can have earned. |
 | `--minutes M` | `90` | Stop this many minutes after the opening. |
 | `--plan` | | Run `check` and show the plan, then exit. Nothing is sent. |
-| `--yes` | | Skip the question. Use it only for a plan you decided yourself beforehand. Refused when check printed a WARNING. |
-| `--allow-used-elsewhere` | | Let `--yes` start although check warned about proofs already used on chain but not in the journal (a lost journal, or another machine sending). |
+| `--yes` | | Skip the question. Use it only for a plan you decided yourself beforehand. Refused when check printed a WARNING, and so is a yes from a pipe. |
+| `--allow-used-elsewhere` | | Let `--yes` or a piped yes start although check warned about proofs already used on chain but not in the journal (a lost journal, or another machine sending). |
 
 ### The gas budget adds up over the days
 
@@ -168,7 +169,7 @@ The summary shows the proofs mined, the gas spent, the coins sold and the BNB re
 | 0 | Done. | Nothing. |
 | 1 | Refused before anything was sent. | Read the one-line reason, fix it, start again. |
 | 3 | The run did not end cleanly: no summary, or an error after it. | `python3 pearl.py status`. If that day's window is still open, start again with `--day N` (the day shown in the plan): the journal keeps any proof that may have been sent from being sent twice. |
-| 4 | The run ended, but the sale was skipped or stopped (STOP, Ctrl-C, a run that did not end normally, a balance that could not be read). | The message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` already filled in. Run it when you are ready. |
+| 4 | The run ended, but the sale was skipped (STOP, Ctrl-C, a run that did not end normally, a balance that could not be read) or the seller stopped before it was done. | Sale skipped: the message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in (none if the run mined nothing; if the balance before the run was unreadable, it says how to choose `--keep-coins`). Run it when you are ready. Seller stopped part way: some coins may be sold already; check `python3 pearl.py status` and `submit/sell.log` before selling more. |
 
 ## Check the code yourself (optional)
 

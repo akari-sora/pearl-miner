@@ -96,10 +96,11 @@ Show the user the plan from step 3:
 - the number of usable proofs;
 - the gas budget and the keep reserve. The budget is a running total for `submit/journal.jsonl`, not per day: to
   give today X BNB, pass `--budget-bnb` = X + what earlier runs spent (the plan shows what is left);
-- the sell mode (`now`, `trail` or `off`) and the sell fraction (by default at most 80% of the coins this run
-  mines; coins held before are never sold);
-- any `WARNING` line from check. With one, `--yes` is refused unless `--allow-used-elsewhere` is added; add that
-  only if the user decides to.
+- the sell mode (`now`, `trail` or `off`) and the sell fraction (by default at most 80% of what this run's proofs
+  can have earned, read as an upper bound before the start; coins held before are sold at most up to that fraction of
+  the gap between the bound and the real reward);
+- any `WARNING` line from check. With one, `--yes` and a piped yes are refused unless `--allow-used-elsewhere` is
+  added; add that only if the user decides to.
 
 Ask whether to change any of it (`--sell`, `--sell-fraction`, `--budget-bnb`, `--keep-bnb`, `--day`). Wait for
 an explicit yes. Silence is not a yes, and neither is "sounds good, but...".
@@ -146,7 +147,7 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | `matches the wallet: False` | The handle is not this wallet's Agent ID. | Check both with the user. |
 | `wallet session: ... (must be CONNECTED)` | The `baw` session ended. | The user re-pairs in the Binance App. |
 | `baw wallet settings` fails, or Developer Mode is off | Developer Mode is off. | The user turns it on in the Binance App. |
-| `WARNING: N sampled proofs are already used on chain` | Proofs sent from another machine or with another journal. | run skips them, at a cost at the opening; better copy that run's `journal.jsonl` into `submit/`. `--yes` then needs `--allow-used-elsewhere`, only if the user decides so. |
+| `WARNING: N sampled proofs are already used on chain` | Proofs sent from another machine or with another journal. | run skips them, at a cost at the opening; better copy that run's `journal.jsonl` into `submit/`. `--yes` or a piped yes then needs `--allow-used-elsewhere`, only if the user decides so. |
 | `the answer does not come from a terminal: pass the --day` | A piped yes without `--day`. | Add the `--day N` from the plan the user approved. |
 | `another run holds submit/journal.jsonl` or `a run started meanwhile` | A submitter is already running. | `python3 pearl.py status`; tell the user. Never start a second one. |
 | `submit/STOP exists` | Left over from an earlier stop. | Ask the user, then delete it. |
@@ -157,7 +158,7 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | fork: port in use, or `anvil` not found | Another node, or Foundry missing. | Pass `--port`, or install Foundry. |
 | `UNSAFE_ARG` | On Windows, a value for `baw` (a `.cmd` shim) that cmd.exe could misread; nothing was sent. | Stop and tell the user. Never work around it. |
 | exit 3 | The run did not end cleanly: no summary, or an error after it. | `python3 pearl.py status`. Before any rerun, get the user's yes again and pass the same `--day N`; if that day's window is over, do not rerun. The journal never sends a proof twice. |
-| exit 4 | The run ended; the sale was skipped or stopped (STOP, Ctrl-C, an abnormal stop, a balance that did not read the same twice). | Tell the user. The message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in; run it only with their ok. |
+| exit 4 | The run ended; the sale was skipped (STOP, Ctrl-C, an abnormal stop, a balance that did not read the same twice) or the seller stopped before it was done. | Tell the user. Skipped: the message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in (none if nothing was mined); run it only with their ok. Seller stopped part way: some coins may be sold already; show the user `python3 pearl.py status` and `submit/sell.log` before any further sale. |
 
 ## Offline tests (optional)
 
