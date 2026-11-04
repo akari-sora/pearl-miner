@@ -31,8 +31,8 @@ CAP = 48         # proofs the fake day takes: three transactions of 16
 OPEN_IN = 5.0    # seconds from the start of a scenario to the fake opening
 
 # ---- the submitter: the real pearl_submit.py; FakeChain answers baw, receipts and simulations. Every mined proof
-# adds E2E_CREDIT raw units to the balance file (with E2E_LATE, only the first transaction's coins arrive before the
-# run ends).
+# adds E2E_CREDIT raw units to the balance file (with E2E_LATE=n, only the first n transactions' coins arrive before
+# the run ends; the rest land when the seller starts).
 SUBMIT_SHIM = r'''
 import json, os, signal, sys, time
 d, repo = os.environ["E2E_DIR"], os.environ["E2E_REPO"]
@@ -100,7 +100,7 @@ def receipt(txh):
     r = fake_receipt(txh)
     if r and r["status"] == "0x1" and txh not in credited:
         credited.append(txh)
-        late = bool(os.environ.get("E2E_LATE")) and len(credited) > 1
+        late = bool(os.environ.get("E2E_LATE")) and len(credited) > int(os.environ["E2E_LATE"])
         raw = len(r["logs"]) * int(os.environ["E2E_CREDIT"])
         record(script="credit", raw=raw, late=late)
         if late:  # these coins reach the balance only when the seller starts
@@ -193,8 +193,8 @@ def token_balance():
         os.remove(late)
     if os.environ.get("E2E_STRANGER") and any("bnb" in o for o in orders.values()):
         after_fill[0] += 1
-        if after_fill[0] == 2:  # the seller has seen its first order's coins leave; 50,000 from elsewhere land now
-            put(get() + 50_000 * COIN)
+        if after_fill[0] == 2:  # between the first and the second order: coins from elsewhere land
+            put(get() + int(os.environ["E2E_STRANGER"]) * COIN)
     return get()
 
 
@@ -261,7 +261,7 @@ SCENARIOS = {  # name: extra environment
     "ctrlc-run": {},
     "ctrlc-balance": {},
     "unclean": {"E2E_RISK_AFTER": "1"},
-    "late": {"E2E_LATE": "1", "E2E_STRANGER": "1"},
+    "late": {"E2E_CAP": "64", "E2E_LATE": "3", "E2E_STRANGER": "5000"},  # 4 txs; the 4th's coins land late
     "ctrlc-sale": {"E2E_SELL_HOLD": "1"},
     "stop-sale": {"E2E_SELL_HOLD": "1"},
 }
@@ -407,10 +407,10 @@ def outer():
                        E2E_REPO=ROOT, E2E_CAP=str(CAP), E2E_CREDIT=str(CREDIT), PEARL_SUBMIT_SCRIPT=os.path.join(work, "e2e_submit.py"),
                        PEARL_SELL_SCRIPT=os.path.join(work, "e2e_sell.py"),
                        PEARL_EXPORT_SCRIPT=os.path.join(work, "no_export.py"),
-                       PATH=os.path.join(work, "nobaw") + os.pathsep + os.environ.get("PATH", ""), **extra)
+                       PATH=os.path.join(work, "nobaw") + os.pathsep + os.environ.get("PATH", ""))
             for k in ("E2E_RISK_AFTER", "E2E_LATE", "E2E_STRANGER", "E2E_SELL_HOLD"):
-                if k not in extra:
-                    env.pop(k, None)
+                env.pop(k, None)
+            env.update(extra)
             t0 = time.time()
             p = subprocess.run([sys.executable, os.path.abspath(__file__), "--one", scenario, work], env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=240)
@@ -488,10 +488,10 @@ def outer():
                 ms = int(0.8 * min(early, (mined or 0) * CREDIT))
                 expect("late: pearl.py capped the sale at 80% of what it saw arrive (--max-sell-coins)",
                        rc == "0" and late > 0 and arg("--max-sell-coins") == f"{ms / COIN:.8f}", (rc, argv, early, late))
-                expect("late: coins that land after pearl.py read the balance (the run's last ones, and 50,000 from "
-                       "elsewhere) are not sold: the real seller sold exactly --max-sell-coins",
-                       sum(swaps) * COIN == ms and bal == BEFORE * COIN + early + late + 50_000 * COIN - ms,
-                       (swaps, ms, bal))
+                expect("late: the run's coins that land after pearl.py read the balance, and 5,000 from elsewhere "
+                       "between the two orders, are not sold: two orders, exactly --max-sell-coins, exit 0",
+                       len(swaps) == 2 and sum(swaps) * COIN == ms
+                       and bal == BEFORE * COIN + early + late + 5_000 * COIN - ms, (swaps, ms, bal))
             elif scenario == "ctrlc-sale":
                 evs = [json.loads(x).get("ev") for x in (rd(os.path.join("data", "sell.jsonl")) or "").splitlines()
                        if x.strip()]
@@ -499,8 +499,9 @@ def outer():
                        sigs == [f"sell {int(want_sig)}"], sigs)
                 expect("ctrlc-sale: the order in flight is followed to its end and journaled, no second order, an end "
                        "record", len(swaps) == 1 and "filled" in evs and evs[-1:] == ["end"], (swaps, evs))
-                expect("ctrlc-sale: exit 4 with the summary", rc == "4" and "==== summary ====" in out
-                       and "seller stopped" in err, (rc, err[-300:]))
+                expect("ctrlc-sale: exit 4 with the summary and the seller's own stop reason", rc == "4"
+                       and "==== summary ====" in out and "seller stopped before it was done" in err
+                       and "signal (Ctrl-C / SIGTERM): stopping" in err, (rc, err[-300:]))
             elif scenario == "stop-sale":
                 evs = [json.loads(x) for x in (rd(os.path.join("data", "sell.jsonl")) or "").splitlines() if x.strip()]
                 expect("stop-sale: STOP while an order is in flight: the order is followed to its end, no second "
@@ -508,8 +509,8 @@ def outer():
                        and evs[-1:] and evs[-1].get("ev") == "end" and evs[-1].get("done") is False and not sigs,
                        (swaps, [r.get("ev") for r in evs], sigs))
                 expect("stop-sale: the seller exits non-zero, so pearl.py exits 4 and says coins may be sold already",
-                       rc == "4" and "seller stopped before it was done" in err and "Some coins may be sold already" in err,
-                       (rc, err[-400:]))
+                       rc == "4" and "seller stopped before it was done" in err and "Some coins may be sold already" in err
+                       and "STOP file: stopping" in err and "stopped before the sale was done" not in err, (rc, err[-400:]))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     print("FAILED:", failed or "none", flush=True)

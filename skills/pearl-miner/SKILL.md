@@ -158,7 +158,7 @@ Logs: `submit/run.log`, `submit/journal.jsonl`, `submit/sell.log`, `submit/sell.
 | fork: port in use, or `anvil` not found | Another node, or Foundry missing. | Pass `--port`, or install Foundry. |
 | `UNSAFE_ARG` | On Windows, a value for `baw` (a `.cmd` shim) that cmd.exe could misread; nothing was sent. | Stop and tell the user. Never work around it. |
 | exit 3 | The run did not end cleanly: no summary, or an error after it. | `python3 pearl.py status`. Before any rerun, get the user's yes again and pass the same `--day N`; if that day's window is over, do not rerun. The journal never sends a proof twice. |
-| exit 4 | The run ended; the sale was skipped (STOP, Ctrl-C, an abnormal stop, a balance that did not read the same twice) or the seller stopped before it was done. | Tell the user. Skipped: the message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in (none if nothing was mined); run it only with their ok. Seller stopped part way: some coins may be sold already; show the user `python3 pearl.py status` and `submit/sell.log` before any further sale. |
+| exit 4 | The run ended; the sale was skipped (STOP, Ctrl-C, an abnormal stop, a balance that did not read the same twice) or the seller stopped before it was done. | Tell the user. Skipped: the message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in (none if nothing was mined); run it only with their ok. Seller stopped before any sale (the message says nothing was sold): same as skipped. Seller stopped part way: some coins may be sold already; show the user `python3 pearl.py status` and `submit/sell.log` before any further sale. |
 
 ## Offline tests (optional)
 

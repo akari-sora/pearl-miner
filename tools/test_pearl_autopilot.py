@@ -115,8 +115,13 @@ d = os.environ["FAKE_DIR"]
 with open(os.path.join(d, "calls.jsonl"), "a", encoding="utf-8") as f:
     f.write(json.dumps({"script": "sell", "argv": sys.argv[1:], "pid": os.getpid()}) + "\n")
 mode = os.environ.get("FAKE_SELL", "ok")
-if mode == "refuse":
-    sys.exit("--wallet 0x... is not the wallet baw is signed in to: refusing to sell")
+if mode == "refuse":  # like pearl_sell before its start record
+    sys.exit("--wallet 0x... is not the wallet baw is signed in to: refusing to sell (before any sale: nothing was sold)")
+if mode == "partial":  # like pearl_sell stopped part way: its reason, the end balance, then its general last line
+    print("12:01:00 STOP file: stopping")
+    print("12:01:00 end balance 5,000.00 珍珠币 (sold 6,000.00); BNB from finished orders ≈ 0.0100", flush=True)
+    sys.exit("stopped before the sale was done (see the line above); some coins may be sold already: check the "
+             "balance and sell.jsonl before selling more")
 if mode == "slow":  # like pearl_sell: a signal only sets a flag; this one never stops on it
     for name in ("SIGINT", "SIGBREAK"):
         if hasattr(signal, name):
@@ -404,6 +409,8 @@ rc = e.run(["--day", "40", "--sell", "off"], env={"FAKE_CHECK": "warn"}, tty=Fal
 expect("N1: a yes from a pipe (no terminal, --day) after a check WARNING: refused like --yes, nothing started",
        rc == 1 and "--allow-used-elsewhere" in e.err and "a yes from a pipe" in e.err and len(e.calls("submit")) == 1
        and e.answers == [], (rc, e.err))
+expect("F4: ... and says what to do when yes was typed in a console Python does not see as a terminal",
+       "Git Bash/mintty" in e.err and "after reading the warning" in e.err, e.err)
 e = Env()
 rc = e.run(["--day", "40", "--sell", "off", "--allow-used-elsewhere"], env={"FAKE_CHECK": "warn"}, tty=False)
 expect("N1: ... allowed with --allow-used-elsewhere", rc == 0 and len(e.calls("submit")) == 2, (rc, e.err))
@@ -606,12 +613,22 @@ rc = e.run(["--yes"], balance_fails=True)
 expect("balance unreadable: the run goes ahead, the sale is skipped, exit 4",
        rc == 4 and len(e.calls("submit")) == 2 and not e.calls("sell") and "did not read the same twice" in e.err,
        (rc, e.err))
+expect("F5: balance before unreadable: the sell command still caps the sale (--max-sell-coins = 80% x 100 x 100)",
+       "--keep-coins N --max-sell-coins 8000.00000000" in e.err and "with N at least the coins you held" in e.err, e.err)
 e = Env()
 rc = e.run(["--yes"], env={"FAKE_SELL": "refuse"})
 expect("seller refuses: exit 4 with its reason", rc == 4 and "not the wallet baw is signed in to" in e.err, e.err)
+expect("F3: the seller refused before any sale: 'Nothing was sold' and the sell command, not 'some coins may be sold'",
+       "Nothing was sold" in e.err and "To sell later: python3 submit/pearl_sell.py run" in e.err
+       and "--max-sell-coins 8000.00000000" in e.err and "may be sold already" not in e.err.lower(), e.err)
+e = Env()
+rc = e.run(["--yes"], env={"FAKE_SELL": "partial"})
 expect("N4: the seller stopped after it started: the message says coins may be sold already, see status and sell.log",
-       "Some coins may be sold already" in e.err and "pearl.py status" in e.err and "sell.log" in e.err
-       and "To sell later" not in e.err, e.err)
+       rc == 4 and "Some coins may be sold already" in e.err and "pearl.py status" in e.err and "sell.log" in e.err
+       and "To sell later" not in e.err, (rc, e.err))
+expect("agy#1: ... and gives the seller's own stop reason once, not its general last line or the end balance",
+       "STOP file: stopping" in e.err and "stopped before the sale was done" not in e.err and "end balance" not in e.err
+       and e.err.lower().count("may be sold already") == 1, e.err)
 e = Env()
 rc = e.run(["--yes"], env={"FAKE_RUN": "nothing", "FAKE_STOP": "STOP file"})
 expect("N4: an abnormal stop before anything was mined: exit 4, no sell command (no --max-sell-coins 0)",
@@ -695,6 +712,15 @@ expect("N1: the fork rehearsal passes --allow-used-elsewhere (its piped yes woul
        '"--allow-used-elsewhere"' in rf_src)
 expect("F6: run_fork exits 1 when the rehearsal fails", "sys.exit(0 if main() else 1)" in rf_src)
 
+hout = io.StringIO()
+with contextlib.redirect_stdout(hout):
+    try:
+        pearl.main(["auto", "--help"])
+    except SystemExit:
+        pass
+expect("agy#2: --allow-used-elsewhere help names --yes and a piped yes",
+       "let --yes or a piped yes start" in " ".join(hout.getvalue().split()), hout.getvalue()[-400:])
+
 print("---- status")
 e = Env()
 e.run(["--yes", "--sell", "off"])
@@ -758,7 +784,8 @@ lists = ("AGENTS.md", "skills/pearl-miner/SKILL.md", "docs/QUICKSTART.md", "docs
 missing = [(r, t) for r in lists for t in SUITES if os.path.basename(t) not in doc(r)]
 expect("docs: every test list names all six offline suites", not missing and all(
     os.path.exists(os.path.join(ROOT, t)) for t in SUITES), missing)
-overclaims = ("never sells coins you already held", "older coins are never sold", "held before are never sold",
+overclaims = ("80% of the coins this run mined", "新挖到幣的最多 80%", "80% of the coins THIS run",
+              "never sells coins you already held", "older coins are never sold", "held before are never sold",
               "Coins you held before are never sold", "elsewhere are never sold.", "原本持有的幣不會被賣",
               "之前就有的幣永遠不會賣", "從別處轉入的幣不會被賣", "every coin you held before the run stay")
 said = [(r, o) for r in lists + ("pearl.py",) for o in overclaims if o in doc(r)]

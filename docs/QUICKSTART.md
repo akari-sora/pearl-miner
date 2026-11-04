@@ -169,7 +169,7 @@ The summary shows the proofs mined, the gas spent, the coins sold and the BNB re
 | 0 | Done. | Nothing. |
 | 1 | Refused before anything was sent. | Read the one-line reason, fix it, start again. |
 | 3 | The run did not end cleanly: no summary, or an error after it. | `python3 pearl.py status`. If that day's window is still open, start again with `--day N` (the day shown in the plan): the journal keeps any proof that may have been sent from being sent twice. |
-| 4 | The run ended, but the sale was skipped (STOP, Ctrl-C, a run that did not end normally, a balance that could not be read) or the seller stopped before it was done. | Sale skipped: the message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in (none if the run mined nothing; if the balance before the run was unreadable, it says how to choose `--keep-coins`). Run it when you are ready. Seller stopped part way: some coins may be sold already; check `python3 pearl.py status` and `submit/sell.log` before selling more. |
+| 4 | The run ended, but the sale was skipped (STOP, Ctrl-C, a run that did not end normally, a balance that could not be read) or the seller stopped before it was done. | Sale skipped: the message ends with the command to sell later, `--keep-coins` and `--max-sell-coins` filled in (none if the run mined nothing; if the balance before the run was unreadable, it says how to choose `--keep-coins`). Run it when you are ready. Seller stopped before any sale (it says so): nothing was sold, and the message gives the same command. Seller stopped part way: some coins may be sold already; check `python3 pearl.py status` and `submit/sell.log` before selling more. |
 
 ## Check the code yourself (optional)
 

@@ -725,6 +725,25 @@ err = run("STOP while settling", e, ["run", "--mode", "now"])
 expect("sell STOP: during the 30 s settling wait it stops at once, before any sale, non-zero",
        err is not None and "STOP file before any sale" in err and e.swaps == [] and CLOCK.now() - t0 < 30)
 
+# 66d. every stop before the start record says "before any sale" (pearl.py then reports that nothing was sold)
+cases = (("another wallet signed in", Env(300_000, signed_in="0x" + "22" * 20), {}),
+         ("the mining run alive", Env(300_000), {"run_alive": True}),
+         ("too little BNB", Env(300_000, bnb=0.00001), {}),
+         ("an order PENDING", Env(300_000, pending_exists=True), {}),
+         ("STOP while settling", Env(300_000, stop_on_read=1), {}))
+for label, e, kw in cases:
+    err = run(f"before any sale: {label}", e, ["run", "--mode", "now"], **kw)
+    expect(f"F3: {label}: refused before any sale, nothing sold, and it says so",
+           err is not None and "before any sale" in err and e.swaps == [])
+e = Env(300_000)
+e.fail_reads_if = lambda: True
+err = run("start balance unreadable", e, ["run", "--mode", "now"])
+expect("F3: start balance unreadable: one line (no traceback) saying nothing was sold",
+       err is not None and "token balance unreadable" in err and "before any sale" in err and e.swaps == [])
+e = Env(300_000, stop_after_swaps=1)
+err = run("STOP part way (no 'before any sale')", e, ["run", "--mode", "now"])
+expect("F3: a stop after the start record never claims 'before any sale'", err is not None and "before any sale" not in err)
+
 # 66. the seller's signal handlers are put back when it returns (an in-process caller keeps its Ctrl-C)
 expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is INITIAL_SIGINT)
 

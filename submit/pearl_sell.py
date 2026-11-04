@@ -74,6 +74,8 @@ def sleep(sec):
 
 SIGNALLED = [False]  # set by Ctrl-C / SIGTERM / Ctrl-Break; the loop stops at its next STOP check
 STOP_FILE = [None]   # set by cmd_run: the STOP file cuts a pause short too
+STARTED = [False]    # set once the start record is written: before it, nothing can have been sold
+NOTHING_SOLD = "before any sale"  # in every message of a stop before the start record (pearl.py looks for it)
 
 
 def on_signal(signum, frame):
@@ -290,8 +292,17 @@ def cmd_run(a):
                 old[getattr(signal, name)] = signal.signal(getattr(signal, name), on_signal)
             except (ValueError, OSError):
                 pass
+    STARTED[0] = False
     try:
         _cmd_run(a)
+    except SystemExit as e:  # a refusal before the start record: say that nothing was sold
+        if not STARTED[0] and isinstance(e.code, str) and NOTHING_SOLD not in e.code:
+            raise SystemExit(f"{e.code} ({NOTHING_SOLD}: nothing was sold)") from None
+        raise
+    except RuntimeError as e:  # the start balance unreadable: one line, no traceback
+        if not STARTED[0]:
+            raise SystemExit(f"{e} ({NOTHING_SOLD}: nothing was sold)") from None
+        raise
     finally:
         for sig, h in old.items():
             try:
@@ -353,7 +364,7 @@ def _cmd_run(a):
         else:
             raise SystemExit("the token balance keeps changing: is something still sending?")
         if stopping():
-            raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} before any sale")
+            raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} {NOTHING_SOLD}")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor = None, None, 0
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
@@ -394,6 +405,7 @@ def _cmd_run(a):
         f"selling {(start_bal - keep) / 10 ** DECIMALS:,.2f}")
     j.write(ev="start" if prev is None else "restart", start_bal=start_bal, keep=keep,
             args={k: (str(v) if isinstance(v, Decimal) else v) for k, v in vars(a).items()})
+    STARTED[0] = True
     chunk, failed, waits, swaps, lwaits, sold_req = a.chunk, 0, 0, 0, 0, 0  # sold_req: coins in finished orders
     total_bnb = Decimal(0)
     t_start, last_sell, hist, qfail = now(), -1e18, [], 0

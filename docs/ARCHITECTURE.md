@@ -217,7 +217,9 @@ files together.
   `baw` runs in a process group of its own.
 - It exits 0 only when the sale is done (nothing sellable left above the kept part, or `--max-sell-coins` reached)
   and the end balance was read. `STOP`, a signal, or an error part way exits non-zero after the `end` record
-  (`done: false`), so `pearl.py` reports exit 4.
+  (`done: false`), so `pearl.py` reports exit 4. A refusal before the `start` record (wrong wallet, the run still
+  alive, too little BNB, a pending order, `STOP` while the balance settles, an unreadable start balance) says
+  "before any sale", and `pearl.py` then reports that nothing was sold, with the command to sell later.
 - `--dry-run` uses real quotes and simulated fills; nothing is sent.
 
 ## The one command (`pearl.py`)

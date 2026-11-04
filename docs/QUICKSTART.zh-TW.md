@@ -155,7 +155,7 @@ Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk ov
 | 0 | 完成。 | 不用做什麼。 |
 | 1 | 送出任何東西之前就拒絕了。 | 看那一行原因，修好後重新開始。 |
 | 3 | 送單沒有乾淨結束：沒有總結，或總結之後出錯。 | 先 `python3 pearl.py status`。如果那一天的時段還沒過，帶上計畫裡的 `--day N` 重新開始：journal 會擋住可能已送出的 proof，不會重複送。 |
-| 4 | 送單結束了，但賣出被跳過（STOP、Ctrl-C、送單不是正常結束、讀不到餘額），或賣出器還沒賣完就停了。 | 賣出被跳過時：訊息最後會印出之後補賣的指令，`--keep-coins` 和 `--max-sell-coins` 都已算好填上（這次沒挖到就不會印；送單前讀不到餘額時，會說明 `--keep-coins` 怎麼選）。準備好時執行它。賣出器中途停止時：可能已經賣掉一部分，先看 `python3 pearl.py status` 和 `submit/sell.log` 再決定要不要補賣。 |
+| 4 | 送單結束了，但賣出被跳過（STOP、Ctrl-C、送單不是正常結束、讀不到餘額），或賣出器還沒賣完就停了。 | 賣出被跳過時：訊息最後會印出之後補賣的指令，`--keep-coins` 和 `--max-sell-coins` 都已算好填上（這次沒挖到就不會印；送單前讀不到餘額時，會說明 `--keep-coins` 怎麼選）。準備好時執行它。賣出器在開賣前就停止時（訊息會寫明）：一枚都沒賣，訊息同樣附上補賣指令。賣出器中途停止時：可能已經賣掉一部分，先看 `python3 pearl.py status` 和 `submit/sell.log` 再決定要不要補賣。 |
 
 ## 自己檢查程式（選用）
 

@@ -54,6 +54,8 @@ CLEAN_STOP_RES = [re.compile(p) for p in (
     r"day \d+ budget full \(", r"tx reverted and the day budget is full$", r"gas budget [0-9.]+ BNB reached\b",
     r"no budget left; only tracking earlier transactions$", r"BNB [0-9.]+ minus in-flight fees would drop under keep ",
     r"deadline$", r"chain moved past day \d+$", r"None$")]
+SELLER_TRAILER = "stopped before the sale was done"  # pearl_sell.py's general last line; its reason is above it
+NOTHING_SOLD = "before any sale"  # pearl_sell.py stopped before its start record: nothing was sold
 CRASH_RE = re.compile(r"\bcrash in \w+: ")  # pearl_submit.py's line when a worker crashed, even after a stop
 LOCKED_TEXT = "another run already holds"  # pearl_submit.py's refusal when the journal is locked
 DECIMALS = 8
@@ -356,12 +358,13 @@ def sell_text(a):
 
 def sell_later_cmd(P, before, mined, max_reward, fraction, after=None):
     """The seller command that sells what this run's sale would have sold, at most."""
-    if before is None:
-        return ("python3 submit/pearl_sell.py run --mode now --keep-coins N, with N at least the coins you held "
-                "before this run")
+    paths = "" if P.dir == SUBMIT else f" --run-pid {P.run_pid} --journal {P.sell_journal}"
+    if before is None:  # the cap still holds: never more than the fraction of what the proofs can have earned
+        cap = int(Decimal(mined * max_reward) * Decimal(str(fraction)))
+        return (f"python3 submit/pearl_sell.py run --mode now --keep-coins N --max-sell-coins {coins_arg(cap)}{paths}, "
+                "with N at least the coins you held before this run")
     keep, max_sell = (sale_plan(before, after, mined, max_reward, fraction) if after is not None else
                       (before, int(Decimal(mined * max_reward) * Decimal(str(fraction)))))
-    paths = "" if P.dir == SUBMIT else f" --run-pid {P.run_pid} --journal {P.sell_journal}"
     return (f"python3 submit/pearl_sell.py run --mode now --keep-coins {coins_arg(keep)} "
             f"--max-sell-coins {coins_arg(max_sell)}{paths}")
 
@@ -492,7 +495,10 @@ def cmd_auto(a):
     if warnings and (a.yes or not stdin_is_tty()) and not a.allow_used_elsewhere:
         raise Refusal(EXIT_REFUSED, "check printed a WARNING (proofs already used on chain but not in the journal: "
                                     "a lost journal, or another machine sending): an answer given beforehand (--yes, "
-                                    "or a yes from a pipe) needs --allow-used-elsewhere too; nothing was sent")
+                                    "or a yes from a pipe) needs --allow-used-elsewhere too; nothing was sent"
+                                    + ("" if a.yes else ". If you typed yes in a console Python does not see as a "
+                                       "terminal (Git Bash/mintty, an IDE console), add --allow-used-elsewhere after "
+                                       "reading the warning"))
     if a.yes:
         out("--yes given: the plan was decided beforehand, starting.")
     else:
@@ -574,11 +580,18 @@ def cmd_auto(a):
                 sm = next((x for x in map(SOLD_RE.search, reversed(slines)) if x), None)
                 sold_line = (f"sold {sm.group(2)} coins for about {sm.group(3)} BNB; {sm.group(1)} coins left"
                              if sm else "no end line from the seller")
-                if src != 0 or s_int:
-                    last = next((x for x in reversed(slines) if x.strip()), "no output")
-                    code, reason = EXIT_SALE, (f"the seller stopped before it was done (exit {src}): "
-                                               f"{last.strip()[:200]}. Some coins may be sold already: check "
-                                               f"python3 pearl.py status and {short(P.sell_log)} before selling more")
+                if src != 0 or s_int:  # the seller's own stop reason, not its general last line or end balance
+                    last = next((x for x in reversed(slines) if x.strip() and not SOLD_RE.search(x)
+                                 and SELLER_TRAILER not in x), "no output").strip()[:200]
+                    if NOTHING_SOLD in last:
+                        sold_line = "skipped: the seller stopped before any sale"
+                        code, reason = EXIT_SALE, (f"the seller stopped before any sale (exit {src}): {last}. Nothing "
+                                                   f"was sold. To sell later: "
+                                                   + sell_later_cmd(P, before, mined, max_reward, a.sell_fraction, after))
+                    else:
+                        code, reason = EXIT_SALE, (f"the seller stopped before it was done (exit {src}): {last}. Some "
+                                                   f"coins may be sold already: check python3 pearl.py status and "
+                                                   f"{short(P.sell_log)} before selling more")
         if sale_block:
             sold_line = f"skipped: {sale_block}"
             later = ("This run mined no proofs, so there is nothing of it to sell." if mined == 0 else
@@ -652,7 +665,8 @@ def main(argv=None):
     au.add_argument("--yes", action="store_true",
                     help="skip the question; only if you decided this plan yourself beforehand")
     au.add_argument("--allow-used-elsewhere", action="store_true",
-                    help="let --yes start although check warned about proofs used on chain but not in the journal")
+                    help="let --yes or a piped yes start although check warned about proofs used on chain but not "
+                         "in the journal")
     au.add_argument("--plan", action="store_true", help="run check and show the plan, then exit; nothing is sent")
     st = sub.add_parser("status", help="is a run going? the end of run.log and sell.log")
     st.add_argument("--lines", type=int, default=15, help="lines of each log to show (default 15)")
