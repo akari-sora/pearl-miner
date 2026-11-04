@@ -496,9 +496,9 @@ def cmd_auto(a):
         raise Refusal(EXIT_REFUSED, "check printed a WARNING (proofs already used on chain but not in the journal: "
                                     "a lost journal, or another machine sending): an answer given beforehand (--yes, "
                                     "or a yes from a pipe) needs --allow-used-elsewhere too; nothing was sent"
-                                    + ("" if a.yes else ". If you typed yes in a console Python does not see as a "
-                                       "terminal (Git Bash/mintty, an IDE console), add --allow-used-elsewhere after "
-                                       "reading the warning"))
+                                    + ("" if a.yes else ". If you are at a console Python does not see as a terminal "
+                                       "(Git Bash/mintty, an IDE console), read the warning, then start again with "
+                                       "--allow-used-elsewhere"))
     if a.yes:
         out("--yes given: the plan was decided beforehand, starting.")
     else:
@@ -581,9 +581,10 @@ def cmd_auto(a):
                 sold_line = (f"sold {sm.group(2)} coins for about {sm.group(3)} BNB; {sm.group(1)} coins left"
                              if sm else "no end line from the seller")
                 if src != 0 or s_int:  # the seller's own stop reason, not its general last line or end balance
-                    last = next((x for x in reversed(slines) if x.strip() and not SOLD_RE.search(x)
-                                 and SELLER_TRAILER not in x), "no output").strip()[:200]
-                    if NOTHING_SOLD in last:
+                    full = next((x for x in reversed(slines) if x.strip() and not SOLD_RE.search(x)
+                                 and SELLER_TRAILER not in x), "no output").strip()
+                    last = full[:200]
+                    if NOTHING_SOLD in full:  # the whole line: a long path can push the marker past 200 chars
                         sold_line = "skipped: the seller stopped before any sale"
                         code, reason = EXIT_SALE, (f"the seller stopped before any sale (exit {src}): {last}. Nothing "
                                                    f"was sold. To sell later: "

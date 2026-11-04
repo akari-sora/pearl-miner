@@ -117,6 +117,9 @@ with open(os.path.join(d, "calls.jsonl"), "a", encoding="utf-8") as f:
 mode = os.environ.get("FAKE_SELL", "ok")
 if mode == "refuse":  # like pearl_sell before its start record
     sys.exit("--wallet 0x... is not the wallet baw is signed in to: refusing to sell (before any sale: nothing was sold)")
+if mode == "refuse-long":  # the same, with a long run.pid path first (the marker lands past 200 characters)
+    sys.exit("the mining run is still alive (" + "/very/long/path" * 15 + "/submit/run.pid): refusing to sell "
+             "(before any sale: nothing was sold)")
 if mode == "partial":  # like pearl_sell stopped part way: its reason, the end balance, then its general last line
     print("12:01:00 STOP file: stopping")
     print("12:01:00 end balance 5,000.00 珍珠币 (sold 6,000.00); BNB from finished orders ≈ 0.0100", flush=True)
@@ -409,8 +412,8 @@ rc = e.run(["--day", "40", "--sell", "off"], env={"FAKE_CHECK": "warn"}, tty=Fal
 expect("N1: a yes from a pipe (no terminal, --day) after a check WARNING: refused like --yes, nothing started",
        rc == 1 and "--allow-used-elsewhere" in e.err and "a yes from a pipe" in e.err and len(e.calls("submit")) == 1
        and e.answers == [], (rc, e.err))
-expect("F4: ... and says what to do when yes was typed in a console Python does not see as a terminal",
-       "Git Bash/mintty" in e.err and "after reading the warning" in e.err, e.err)
+expect("F4: ... and says what to do at a console Python does not see as a terminal",
+       "Git Bash/mintty" in e.err and "read the warning, then start again with --allow-used-elsewhere" in e.err, e.err)
 e = Env()
 rc = e.run(["--day", "40", "--sell", "off", "--allow-used-elsewhere"], env={"FAKE_CHECK": "warn"}, tty=False)
 expect("N1: ... allowed with --allow-used-elsewhere", rc == 0 and len(e.calls("submit")) == 2, (rc, e.err))
@@ -621,6 +624,11 @@ expect("seller refuses: exit 4 with its reason", rc == 4 and "not the wallet baw
 expect("F3: the seller refused before any sale: 'Nothing was sold' and the sell command, not 'some coins may be sold'",
        "Nothing was sold" in e.err and "To sell later: python3 submit/pearl_sell.py run" in e.err
        and "--max-sell-coins 8000.00000000" in e.err and "may be sold already" not in e.err.lower(), e.err)
+e = Env()
+rc = e.run(["--yes"], env={"FAKE_SELL": "refuse-long"})
+expect("S4-1: a refusal whose marker sits past 200 characters still says 'Nothing was sold' with the sell command",
+       rc == 4 and "Nothing was sold" in e.err and "To sell later: python3 submit/pearl_sell.py run" in e.err
+       and "may be sold already" not in e.err.lower(), (rc, e.err))
 e = Env()
 rc = e.run(["--yes"], env={"FAKE_SELL": "partial"})
 expect("N4: the seller stopped after it started: the message says coins may be sold already, see status and sell.log",

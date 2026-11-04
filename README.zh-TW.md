@@ -453,7 +453,7 @@ python3 pearl.py auto
 - **不確定就停，不猜**：preview 有任何風險提示、無法解釋的模擬失敗、gas 預算用完、`STOP` 檔或截止時間，都會乾淨地停下。
 - **接近額度上限時自動切小批**，不讓整筆 16 個 proof 的交易 revert。
 - **完全沒有私鑰**：幣安 Agentic Wallet 是 MPC 錢包，工具只操作它的 CLI。
-- **上主網前先驗證**：六套離線測試（送單器 **88 項**、賣出器 **97 項**、紀錄去識別化 **38 項**、一行指令 `pearl.py` **142 項**、礦機批次大小調整 **17 項**、`pearl.py` 端對端（真的訊號）**35 項**），在 macOS、Linux 和 Windows 上都跑過（[PLATFORMS.zh-TW.md](docs/PLATFORMS.zh-TW.md)），以及在真合約分叉上的完整模擬（現場換日、對手吃額度）。
+- **上主網前先驗證**：六套離線測試（送單器 **88 項**、賣出器 **97 項**、紀錄去識別化 **38 項**、一行指令 `pearl.py` **143 項**、礦機批次大小調整 **17 項**、`pearl.py` 端對端（真的訊號）**35 項**），在 macOS、Linux 和 Windows 上都跑過（[PLATFORMS.zh-TW.md](docs/PLATFORMS.zh-TW.md)），以及在真合約分叉上的完整模擬（現場換日、對手吃額度）。
 - **送單器與賣出器只用 Python 標準函式庫**：把 `pearl_submit.py`（以及會引用它的地址檢查的 `pearl_sell.py`）複製到有錢包 session 的機器上即可。
 
 ### 運作流程圖
@@ -484,7 +484,7 @@ flowchart LR
 
 ![anvil 分叉模擬](demo/simulation.gif)
 
-**離線測試**：送單器對假鏈與假 `baw`（88 項檢查）；賣出器對依真實池子校準的流動性模型（97 項檢查）；紀錄去識別化規則（38 項檢查）；`pearl.py` 搭配假的子程式（142 項檢查）；礦機批次大小調整（17 項檢查）；以及 `pearl.py` 搭配真的送單器與賣出器、假的鏈與市場，用 STOP 和真的 Ctrl-C 停止（35 項檢查）。清單與執行方式見 [docs/QUICKSTART.zh-TW.md](docs/QUICKSTART.zh-TW.md#自己檢查程式選用)。（[MP4](demo/tests.mp4)）
+**離線測試**：送單器對假鏈與假 `baw`（88 項檢查）；賣出器對依真實池子校準的流動性模型（97 項檢查）；紀錄去識別化規則（38 項檢查）；`pearl.py` 搭配假的子程式（143 項檢查）；礦機批次大小調整（17 項檢查）；以及 `pearl.py` 搭配真的送單器與賣出器、假的鏈與市場，用 STOP 和真的 Ctrl-C 停止（35 項檢查）。清單與執行方式見 [docs/QUICKSTART.zh-TW.md](docs/QUICKSTART.zh-TW.md#自己檢查程式選用)。（[MP4](demo/tests.mp4)）
 
 ![兩套離線測試全部通過](demo/tests.gif)
 
@@ -506,7 +506,7 @@ submit/
   fork_rehearsal/      anvil 分叉模擬與假 baw（只連 127.0.0.1）
 tools/replay_log.py    依原始節奏重播送單紀錄（去除可識別資訊）
 tools/test_replay_log.py  去識別化的離線測試（38 項檢查）
-tools/test_pearl_autopilot.py  pearl.py 的離線測試（142 項檢查）
+tools/test_pearl_autopilot.py  pearl.py 的離線測試（143 項檢查）
 tools/test_pearl_e2e.py  pearl.py 端對端：真的送單器與賣出器、真的訊號（35 項檢查）
 demo/                  vhs 腳本、GIF / MP4、去識別化的第 1 天紀錄
 docs/                  QUICKSTART、AGENTS-SETUP、PLATFORMS、CONTRACT.md、ARCHITECTURE.md
