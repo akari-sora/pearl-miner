@@ -69,13 +69,16 @@ expect("never above MAX_ITERS", next_launch(GSZ, MAX_ITERS, 0.001, TARGET, UNIT)
 MINER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miner.py")
 CASE = r"""
 import runpy, sys, types
-fake, block, broken = sys.argv[1].split(","), sys.argv[2], sys.argv[3] == "broken"
+fake, block, kind = sys.argv[1].split(","), sys.argv[2], sys.argv[3]
+broken = kind == "broken"
 for m in filter(None, fake):
     sys.modules[m] = types.ModuleType(m)
 class Hook:
     def find_spec(self, name, path=None, target=None):
         if name == block and broken:
             raise ImportError("libOpenCL.so.1: cannot open shared object file", name=block + "._cl")
+        if name == block and kind.startswith("sub:"):  # the package is there, a module inside it is not
+            raise ModuleNotFoundError(f"No module named {kind[4:]!r}", name=kind[4:])
         if name == block:
             raise ModuleNotFoundError(f"No module named {name!r}", name=name)
 for m in list(sys.modules):
@@ -88,7 +91,9 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 for fake, block, kind, want in ((",", "numpy", "missing", "numpy is not installed"),
                                 ("numpy", "pyopencl", "missing", "pyopencl is not installed"),
                                 ("numpy,pyopencl", "Crypto", "missing", "pycryptodome is not installed"),
-                                ("numpy", "pyopencl", "broken", "pyopencl could not be loaded")):
+                                ("numpy", "pyopencl", "broken", "pyopencl could not be loaded"),
+                                ("numpy", "pyopencl", "sub:pyopencl._cl", "pyopencl is not installed"),
+                                ("numpy,pyopencl", "Crypto", "sub:Crypto.Hash", "pycryptodome is not installed")):
     p = subprocess.run([sys.executable, "-I", "-c", CASE, fake, block, kind, MINER], stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
     err = p.stderr.decode("utf-8", "replace").strip()

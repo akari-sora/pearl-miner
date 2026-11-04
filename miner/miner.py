@@ -43,7 +43,7 @@ except ImportError as e:  # a fresh clone without the packages: say what to inst
     _py = f'"{sys.executable}"' if " " in sys.executable else sys.executable
     _top = (e.name or "").split(".")[0]
     if isinstance(e, ModuleNotFoundError) and _top in PIP_NAME:
-        sys.exit(f"miner.py: the Python package {PIP_NAME[e.name]} is not installed; install the miner's packages "
+        sys.exit(f"miner.py: the Python package {PIP_NAME[_top]} is not installed; install the miner's packages "
                  f"with: {_py} -m pip install -r {_req}")
     sys.exit(f"miner.py: {PIP_NAME.get(_top, _top or 'a package')} could not be loaded ({e}); reinstall with: "
              f"{_py} -m pip install -r {_req} (pyopencl also needs a GPU OpenCL driver, see docs/PLATFORMS.md)")
