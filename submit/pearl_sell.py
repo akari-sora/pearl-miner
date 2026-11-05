@@ -380,6 +380,7 @@ def _cmd_run(a):
             raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} {NOTHING_SOLD}")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor, prev_rate0, prev_swapped = None, None, 0, None, False
+    anchor_t = anchor_bal = None  # where the session's schedule starts: its first start or restart that sent an order
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
         for line in open(a.journal, encoding="utf-8", errors="replace"):
             try:
@@ -396,6 +397,7 @@ def _cmd_run(a):
                 continue
             if rec.get("ev") == "start" and isinstance(rec.get("start_bal"), int) and isinstance(rec.get("keep"), int):
                 prev, last_bal, prev_rate0, prev_swapped = rec, rec["start_bal"], None, False
+                anchor_t, anchor_bal = rec.get("t"), rec["start_bal"]
             elif prev is not None and rec.get("ev") == "rate0" and not prev_swapped:  # the rate the swaps went by
                 try:
                     r0 = Decimal(str(rec.get("rate0")))
@@ -404,6 +406,8 @@ def _cmd_run(a):
                     pass
             elif prev is not None and rec.get("ev") == "restart" and isinstance(rec.get("start_bal"), int):
                 last_bal = rec["start_bal"]
+                if not prev_swapped:  # no order before it: the schedule and first rate start at this restart
+                    anchor_t, anchor_bal, prev_rate0 = rec.get("t"), rec["start_bal"], None
             elif prev is not None and rec.get("ev") == "end" and isinstance(rec.get("end_bal"), int):
                 last_bal = rec["end_bal"]
         if prev is not None and start_bal > last_bal:  # new coins came in (another night's mining): new session
@@ -436,9 +440,9 @@ def _cmd_run(a):
     rate0 = prev_rate0 if prev is not None and prev_swapped else None
     cap, fl, now_tries = Decimal(str(a.max_impact)), Decimal(str(a.floor)), 0
     start_sellable = max(1, start_bal - keep)
-    if prev is not None and prev_swapped:  # the schedule continues from the first run
-        t_start = float(prev.get("t", t_start))
-        start_sellable = max(1, int(prev["start_bal"]) - keep)
+    if prev is not None and prev_swapped:  # the schedule continues from the run that sent the first order
+        t_start = float(anchor_t if isinstance(anchor_t, (int, float)) else t_start)
+        start_sellable = max(1, int(anchor_bal) - keep)
     done = False  # only the two normal ends set it; any other stop makes the script exit non-zero
     while True:
         if os.path.exists(stop_file) or SIGNALLED[0]:
@@ -534,7 +538,8 @@ def _cmd_run(a):
                 break
             waits += 1
             if waits > a.max_waits:
-                say("the price stays outside --max-impact: stopping")
+                say("the price stays outside --max-impact / --floor: stopping"
+                    + (f" {NOTHING_SOLD} in this session" if swaps == 0 and sold_req == 0 else ""))
                 break
             say(f"{why} at the smallest chunk; waiting {a.gap * 2}s")
             pause(a.gap * 2)

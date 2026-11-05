@@ -270,7 +270,7 @@ print(buf.getvalue(), end="")
 expect("too thin: nothing sold", e.swaps == [] and e.bal == 300_000 * 10 ** 8)
 expect("too thin, trail: it waited 2 x --gap --max-waits (6) times at the smallest chunk, then stopped not done",
        buf.getvalue().count("at the smallest chunk; waiting 120.0s") == 6
-       and "the price stays outside --max-impact: stopping" in buf.getvalue()
+       and "the price stays outside --max-impact / --floor: stopping before any sale in this session" in buf.getvalue()
        and journal_events(tmpd)[-1].get("done") is False)
 
 # 4. two failed orders in a row: stop
@@ -833,6 +833,25 @@ expect("v0.1.4: now (no order) -> trail later: a restart record, a fresh first r
        and sum(r.get("ev") == "rate0" for r in later) == 1 and ticks and ticks[0].get("el", 99) < 1
        and ticks[0].get("reason") is None)
 expect("v0.1.4: ... and it then sells the 80% on its schedule", err is None and e.bal == 6_000 * 10 ** 8)
+
+# 74. three sessions: now (no order) -> 90 min later trail sells one chunk and stops -> trail again: the third takes
+#     its schedule from the second (the one that sent the order), not from the first's no-order start
+tmpd = tempfile.mkdtemp(prefix="sell-chain-")
+e = Env(300_000)
+run("chain 1: now, no order", e, ["run", "--mode", "now", "--max-impact", "0.0001"], tmp=tmpd)
+CLOCK.sleep(90 * 60)
+e.pool.t0 = CLOCK.now()
+run("chain 2: trail, one swap", e, ["run", "--max-swaps", "1"], tmp=tmpd)
+CLOCK.sleep(5 * 60)
+n_before = len(journal_events(tmpd))
+run("chain 3: trail again", e, ["run", "--max-swaps", "1"], tmp=tmpd)
+evs = journal_events(tmpd)
+ticks = [r for r in evs[n_before:] if r.get("ev") == "tick"]
+t_s1 = next(r["t"] for r in evs if r.get("ev") == "start")
+t_s2 = [r["t"] for r in evs if r.get("ev") == "restart"][0]  # session 2, the one that sent the first order
+expect("v0.1.4: chain: session 3's schedule counts from session 2 (the first that sent an order), not from "
+       "session 1's no-order start", ticks and abs(ticks[0]["el"] - (ticks[0]["t"] - t_s2) / 60) < 0.1
+       and t_s2 - t_s1 > 80 * 60 and len(e.swaps) >= 2)
 
 # 73. plan quotes with the --slippage it is given (it used the old 1.5 constant)
 seen_slip = []

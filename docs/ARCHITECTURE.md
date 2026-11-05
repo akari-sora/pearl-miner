@@ -207,7 +207,11 @@ files together.
   `sell.jsonl` across a restart): no chunk sells below half of it, however many chunks came before or however far
   the market fell meanwhile (`--floor 0` turns it off). Over either limit at the smallest chunk, `--mode now` quotes
   again twice 10 s apart and then stops (exit non-zero; its line says "before any sale" when the session placed no
-  order, and `pearl.py` then prints the command to sell later); `--mode trail` waits and quotes again. Until v0.1.3
+  order, and `pearl.py` then prints the command to sell later); `--mode trail` waits and quotes again, and says the
+  same when it gives up without an order. Both limits are checked on the quotes before each swap; `baw market-order
+  swap` takes no minimum output, so the fill itself is bounded only by `--slippage` against baw's own quote. A
+  restart keeps the schedule and the first rate of the run that sent the session's first order; a session from
+  v0.1.3 or earlier has no first rate in its journal, so its restart takes the rate at that moment. Until v0.1.3
   the cap was 2% and there was no floor; on 2026-11-04 the pool was about 0.01 BNB deep, 23,958 coins took 42%
   impact, and a 2% cap would have sold nothing while the price fell 88% within 268 s of the opening.
 - `--mode trail` (default) waits for a pullback of `--pullback` (7%) from the running high of the price, or for a
