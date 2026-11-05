@@ -910,6 +910,19 @@ expect("v0.1.4: the capped run journals keep 60,000 (run_keep 250,000), sells 50
        "60,000", st.get("keep") == 60_000 * 10 ** 8 and st.get("run_keep") == 250_000 * 10 ** 8
        and e.swaps[0] == 50_000 and e.bal == 60_000 * 10 ** 8)
 
+# 79. a STOP file while the wallet-address call keeps failing: no third try, refused before any sale
+e = Env(300_000)
+e.wallet_blips = 3
+orig_w = e.baw
+def baw_w(args, timeout=60):
+    if args[:2] == ["wallet", "address"] and getattr(e, "wallet_calls", 0) == 1:
+        open(os.path.join(ps.HERE, "STOP"), "w").close()  # appears right after the first failed call
+    return orig_w(args, timeout)
+e.baw = baw_w
+err = run("wallet blips, then STOP", e, ["run", "--mode", "now"])
+expect("v0.1.4: STOP between wallet-address tries: stops trying (2 calls, not 3), nothing sold",
+       err is not None and "before any sale" in err and e.swaps == [] and e.wallet_calls == 2)
+
 # 73. plan quotes with the --slippage it is given (it used the old 1.5 constant)
 seen_slip = []
 e = Env(300_000)

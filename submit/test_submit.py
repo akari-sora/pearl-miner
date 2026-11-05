@@ -1079,6 +1079,22 @@ def _main():
         ps.say = saved_say
     expect("v0.1.4: a worker crash with stdout gone still stops the run (stop before the print; the print error is "
            "swallowed)", stops7 == ["crash in tracker: KeyError('x')"] and raised is None)
+    # ... and with the real Runner.stop (it prints "STOP:" itself): the stop record is journaled, nothing escapes
+    jrec8 = []
+    fake8 = types.SimpleNamespace(j=types.SimpleNamespace(write=lambda **k: jrec8.append(k)), stop_reason=None,
+                                  lock=threading.Lock(), launch_lock=threading.Lock())
+    fake8.stop = lambda reason: ps.Runner.stop(fake8, reason)
+    fake8._stop_locked = lambda reason: ps.Runner._stop_locked(fake8, reason)
+    ps.say, raised = broken_say, None
+    try:
+        ps.Runner.guarded(fake8, tracker)
+    except Exception as e:  # noqa: BLE001
+        raised = e
+    finally:
+        ps.say = saved_say
+    expect("v0.1.4: the real stop() with stdout gone: stop_reason set, the stop record journaled, no error escapes",
+           fake8.stop_reason == "crash in tracker: KeyError('x')" and raised is None
+           and [r.get("ev") for r in jrec8] == ["crash", "stop"])
 
     print(f"[summary] {checks[0]} checks")
     print("FAILED:", fails if fails else "none")

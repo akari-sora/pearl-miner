@@ -1071,8 +1071,11 @@ class Runner:
         with self.lock:
             if self.stop_reason is None:
                 self.stop_reason = reason
-                say("STOP:", reason)
-                self.j.write(ev="stop", reason=reason)
+                self.j.write(ev="stop", reason=reason)  # first: a failing print below must not lose the record
+                try:
+                    say("STOP:", reason)
+                except (OSError, ValueError):  # stdout gone (a closed pipe or file): the journal holds it
+                    pass
 
     def stopped(self):
         return (self.stop_reason is not None or self.signalled or os.path.exists(self.a.stop_file)
@@ -1639,7 +1642,7 @@ class Runner:
             finally:
                 try:
                     say(f"crash in {fn.__name__}: {e!r}")  # always on the output, also when an earlier stop reason stands
-                except OSError:  # stdout gone (a closed pipe): the journal and the stop reason still hold it
+                except (OSError, ValueError):  # stdout gone (a closed pipe or file): the journal and stop reason hold it
                     pass
 
     def finished(self):

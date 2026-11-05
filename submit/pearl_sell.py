@@ -143,7 +143,9 @@ def baw_wallet_address(tries=3):
     in `tries` calls 2 s apart (one backend blip after a long run must not cancel the whole sale)."""
     for i in range(tries):
         if i:
-            sleep(2)
+            pause(2)
+            if stopping():  # a signal or the STOP file: no more tries (the caller refuses; nothing was sold)
+                break
         r = baw(["wallet", "address"])
         d = r.get("data") if r.get("success") is True else None
         items = d.get("addresses") if isinstance(d, dict) else None
