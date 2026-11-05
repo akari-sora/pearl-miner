@@ -126,13 +126,14 @@ ps.main()
 '''
 
 # ---- the seller: the real pearl_sell.py on a fake market. A sale of q coins gets RATE * q / (1 + q / DEPTH) BNB:
-# 38,400 coins at once is over the 2% impact cap, its 20,000-coin minimum chunk is not. Time is virtual.
+# 38,400 coins at once is over the 50% impact cap, its 20,000-coin minimum chunk is not (a pool about as thin as the
+# real one on 2026-11-04). Time is virtual.
 SELL_SHIM = r'''
 import json, os, signal, sys, time
 d, repo = os.environ["E2E_DIR"], os.environ["E2E_REPO"]
 sys.path.insert(0, os.path.join(repo, "submit"))
 import pearl_sell as ps
-COIN, RATE, DEPTH = 10 ** 8, 1 / 431426, 1_300_000
+COIN, RATE, DEPTH = 10 ** 8, 1 / 431426, 30_000
 orders, clock, after_fill = {}, [1_800_000_000.0], [0]
 
 
@@ -452,7 +453,7 @@ def outer():
                 expect("full: exit 0; the seller got --keep-coins = before + 20% and --max-sell-coins = 80% of the new",
                        rc == "0" and len(sells) == 1 and ms is not None and arg("--max-sell-coins") == f"{ms / COIN:.8f}"
                        and arg("--keep-coins") == f"{(BEFORE * COIN + new - ms) / COIN:.8f}", (rc, argv, err[-300:]))
-                expect("full: the real seller split the sale (2% impact cap) and sold exactly that",
+                expect("full: the real seller split the sale (50% impact cap) and sold exactly that",
                        len(swaps) >= 2 and sum(swaps) * COIN == ms and bal == BEFORE * COIN + new - ms, (swaps, bal))
                 try:
                     utf8 = "珍珠币" in p.stdout.decode("utf-8")

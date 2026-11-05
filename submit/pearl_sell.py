@@ -4,7 +4,7 @@
 """Sell a fraction of the wallet's 珍珠币 for BNB in chunks through `baw market-order` (Binance Web3 Wallet).
 
 Default policy: after the mining run has finished, sell 80% in chunks of about 100k coins,
-quoting first; skip a chunk whose price impact exceeds 2%; keep the rest.
+quoting first; halve a chunk whose price impact exceeds 50%; keep the rest.
 Wallet: --wallet or env PEARL_WALLET (the Agentic Wallet address that holds the coins).
 
 Timing (--mode trail, default; from the pool's history): do not dump at the moment the day's cap fills.
@@ -23,7 +23,12 @@ Rules this script enforces:
   `& echo $! > submit/run.pid`, or on Windows with Start-Process -PassThru, see docs/PLATFORMS.md): one tx per
   address at a time;
 - every chunk: a small reference quote and a chunk quote; impact = 1 - chunk rate / reference rate;
-  above --max-impact the chunk is halved down to --min-chunk, then the script waits and re-quotes;
+  above --max-impact the chunk is halved down to --min-chunk; still above it there, --mode now stops at once
+  (exit non-zero, nothing more sold) and --mode trail waits and re-quotes;
+- why the cap is 50% (--max-impact 0.5) and slippage 3% (until v0.1.3: 2% and 1.5%): on 2026-11-04 the only pool
+  was about 0.01 BNB deep. Selling 23,958 coins took 42% impact, so a 2% cap sold nothing and kept waiting while
+  the price fell 88% within 268 s of the opening. In a pool this thin the impact is highest exactly when the
+  price is highest (few coins in the pool), and the coins lose far more by waiting than by the impact;
 - after a swap it polls `market-order list --orderId` to FINISHED / FAILED; an order still PENDING or with an
   unreadable status stops the script (state unknown: never resubmit blindly);
 - progress is measured from the on-chain token balance, never from assumed fills;
@@ -485,6 +490,10 @@ def _cmd_run(a):
                 chunk = max(a.min_chunk, qty // 2)
                 say(f"impact above {a.max_impact:.0%}: chunk -> {chunk:,}")
                 continue
+            if a.mode == "now":  # "now" means now: waiting here only sells later into a falling price
+                say(f"impact {impact:.0%} is above --max-impact {a.max_impact:.0%} even at the minimum chunk "
+                    f"({qty:,} coins): stopping; raise --max-impact, or sell later with --mode trail")
+                break
             waits += 1
             if waits > a.max_waits:
                 say("impact stays too high: stopping")
@@ -612,8 +621,9 @@ def main():
         s.add_argument("--fraction", type=float, default=0.8)
         s.add_argument("--chunk", type=int, default=100_000)
         s.add_argument("--min-chunk", type=int, default=20_000)
-        s.add_argument("--max-impact", type=float, default=0.02)
-        s.add_argument("--slippage", type=float, default=1.5)
+        s.add_argument("--max-impact", type=float, default=0.5,
+                       help="halve a chunk whose quote is this far below the 1,000-coin reference rate (0.5 = 50%%)")
+        s.add_argument("--slippage", type=float, default=3.0, help="slippage cap in percent, at most 5")
         s.add_argument("--gap", type=float, default=60.0, help="minimum seconds between two sales")
         s.add_argument("--mode", choices=("trail", "now"), default="trail")
         s.add_argument("--poll", type=float, default=30.0, help="seconds between reference quotes while holding")

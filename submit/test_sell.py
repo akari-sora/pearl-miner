@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Akari Sora
 """Offline simulation of pearl_sell.py: fake baw + a constant-liquidity pool model calibrated on the
 PancakeSwap Infinity pool (evening of 2026-11-03: L = 7.06e17, 431,426 coins per BNB, fee 0.3726%)."""
-import atexit, json, math, os, shutil, signal, subprocess, sys, tempfile, time
+import atexit, contextlib, io, json, math, os, shutil, signal, subprocess, sys, tempfile, time
 from decimal import Decimal
 OWN_TMP = tempfile.mkdtemp(prefix="pearl-test-sell-")  # every temp dir of this run goes here; removed at exit,
 tempfile.tempdir = OWN_TMP                              # also after a failure
@@ -88,7 +88,7 @@ class Env:
         self.pool = pool or Pool()
         self.fail_orders, self.pending_forever, self.swap_errors = fail_orders, pending_forever, swap_errors
         self.bad_quotes, self.partial, self.dump_after = bad_quotes, partial, dump_after
-        self.orders, self.swaps, self.quotes, self.impacts = {}, [], 0, []
+        self.orders, self.swaps, self.quotes, self.impacts, self.slips = {}, [], 0, [], []
         self.sale_times, self.sale_prices = [], []
 
     def baw(self, args, timeout=60):
@@ -135,6 +135,7 @@ class Env:
             if self.swap_errors > 0:
                 self.swap_errors -= 1
                 return {"success": False, "error": {"code": "351000", "message": "swap rejected"}}
+            self.slips.append(float(args[args.index("--slippage") + 1]))
             ref, _ = self.pool.out(1000)
             got, _ = self.pool.out(qty)
             self.impacts.append(1 - (got / qty) / (ref / 1000))
@@ -245,17 +246,20 @@ run("normal 300k", e, ["run"])
 expect("sold exactly 80% in 3 chunks", e.swaps == [100_000, 100_000, 40_000] and e.bal == 60_000 * 10 ** 8)
 expect("every executed chunk under 2% impact", all(i <= 0.02 for i in e.impacts))
 
-# 2. thin pool: 100k would exceed 2%, chunks shrink, never below the kept 20%
+# 2. thin pool: 100k would exceed a 2% cap, chunks shrink, never below the kept 20% (the cap is explicit: the
+#    default is 50% since v0.1.4)
 e = Env(300_000, pool=Pool(L=int(7.06e17 / 20)))
-run("thin pool", e, ["run"])
+run("thin pool", e, ["run", "--max-impact", "0.02"])
 expect("thin pool: kept >= 20%", e.bal >= 60_000 * 10 ** 8)
 expect("thin pool: every executed chunk under 2%", e.swaps and all(i <= 0.02 for i in e.impacts))
 expect("thin pool: chunks shrank below 100k", max(e.swaps) < 100_000)
 
-# 3. pool too thin even at the minimum chunk: no swap at all
+# 3. pool too thin even at the minimum chunk: no swap at all; --mode trail keeps waiting and re-quoting
 e = Env(300_000, pool=Pool(L=int(7.06e17 / 200)))
-run("too thin", e, ["run"])
+t0 = CLOCK.now()
+run("too thin", e, ["run", "--max-impact", "0.02"])
 expect("too thin: nothing sold", e.swaps == [] and e.bal == 300_000 * 10 ** 8)
+expect("too thin, trail: it waited (2 x --gap per try) before giving up", CLOCK.now() - t0 >= 6 * 120)
 
 # 4. two failed orders in a row: stop
 e = Env(300_000, fail_orders=2)
@@ -302,9 +306,9 @@ e = Env(0)
 run("dry run", e, ["run", "--dry-run", "--assume-balance", "250000"])
 expect("dry run: no swap sent", e.swaps == [] and e.quotes > 0 and e.bal == 0)
 
-# 13. someone dumps mid-sale: impact measured against the fresh price, still <= 2%
+# 13. someone dumps mid-sale: impact measured against the fresh price, still <= the 2% cap
 e = Env(500_000, dump_after=1)
-run("dump mid-sale", e, ["run"])
+run("dump mid-sale", e, ["run", "--max-impact", "0.02"])
 expect("dump mid-sale: every executed chunk under 2%", all(i <= 0.02 for i in e.impacts) and e.bal == 100_000 * 10 ** 8)
 
 # 14. small balance below the minimum chunk: sold in one go, 20% kept
@@ -428,7 +432,7 @@ expect("--dust 0 refused", err == "bad arguments")
 
 # 34. halving works from the actual quantity on the last small chunk
 e = Env(60_000, pool=Pool(L=int(7.06e17 / 25)))
-run("thin pool small last chunk", e, ["run", "--mode", "now"])
+run("thin pool small last chunk", e, ["run", "--mode", "now", "--max-impact", "0.02"])
 expect("small last chunk: sold in pieces, all under 2%", len(e.swaps) >= 2 and all(i <= 0.02 for i in e.impacts)
        and e.bal >= 12_000 * 10 ** 8)
 
@@ -743,6 +747,32 @@ expect("F3: start balance unreadable: one line (no traceback) saying nothing was
 e = Env(300_000, stop_after_swaps=1)
 err = run("STOP part way (no 'before any sale')", e, ["run", "--mode", "now"])
 expect("F3: a stop after the start record never claims 'before any sale'", err is not None and "before any sale" not in err)
+
+# 67. v0.1.4 defaults on the pool of 2026-11-04 (about 0.01 BNB deep; 24k coins = 42% impact, 20k = 37%):
+#     the default 50% cap sells the 80% in one swap at 3% slippage; a 2% cap would have sold nothing
+DAY2 = dict(L=int(1.1e14), tok_per_bnb=7_900_000)
+e = Env(30_000, pool=Pool(**DAY2))
+err = run("day-2 pool, defaults", e, ["run", "--mode", "now"])
+expect("v0.1.4: the default cap sells 24,000 of 30,000 coins in one swap on the day-2 pool",
+       err is None and e.swaps == [24_000] and e.bal == 6_000 * 10 ** 8 and 0.40 < e.impacts[0] < 0.44)
+expect("v0.1.4: default slippage 3%", e.slips == [3.0])
+
+# 68. --mode now: still above the cap at the minimum chunk -> stop at once with a hint, exit non-zero, no swap
+#     (until v0.1.3 it waited 2 x --gap up to --max-waits times, about 13 minutes, while the price fell)
+tmpd = tempfile.mkdtemp(prefix="sell-nowthin-")
+e = Env(30_000, pool=Pool(**DAY2))
+t0 = CLOCK.now()
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    err = run("day-2 pool, 2% cap, now", e, ["run", "--mode", "now", "--max-impact", "0.02"], tmp=tmpd)
+print(buf.getvalue(), end="")
+evs = journal_events(tmpd)
+expect("v0.1.4: now + cap too low at the minimum chunk: stops at once, nothing sold, non-zero, says why",
+       err is not None and "stopped before the sale was done" in err and e.swaps == [] and e.bal == 30_000 * 10 ** 8
+       and CLOCK.now() - t0 < 120 and evs and evs[-1].get("ev") == "end" and evs[-1].get("done") is False)
+expect("v0.1.4: the stop line names the minimum chunk, --max-impact and --mode trail",
+       "even at the minimum chunk (20,000 coins): stopping; raise --max-impact, or sell later with --mode trail"
+       in buf.getvalue())
 
 # 66. the seller's signal handlers are put back when it returns (an in-process caller keeps its Ctrl-C)
 expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is INITIAL_SIGINT)
