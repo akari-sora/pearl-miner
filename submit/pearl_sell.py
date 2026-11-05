@@ -380,7 +380,7 @@ def _cmd_run(a):
             raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} {NOTHING_SOLD}")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor, prev_rate0, prev_swapped = None, None, 0, None, False
-    anchor_t = anchor_bal = None  # where the session's schedule starts: its first start or restart that sent an order
+    anchor_t = anchor_bal = anchor_keep = None  # the session's start, or its last restart before the first order
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
         for line in open(a.journal, encoding="utf-8", errors="replace"):
             try:
@@ -397,7 +397,7 @@ def _cmd_run(a):
                 continue
             if rec.get("ev") == "start" and isinstance(rec.get("start_bal"), int) and isinstance(rec.get("keep"), int):
                 prev, last_bal, prev_rate0, prev_swapped = rec, rec["start_bal"], None, False
-                anchor_t, anchor_bal = rec.get("t"), rec["start_bal"]
+                anchor_t, anchor_bal, anchor_keep = rec.get("t"), rec["start_bal"], rec["keep"]
             elif prev is not None and rec.get("ev") == "rate0" and not prev_swapped:  # the rate the swaps went by
                 try:
                     r0 = Decimal(str(rec.get("rate0")))
@@ -406,17 +406,19 @@ def _cmd_run(a):
                     pass
             elif prev is not None and rec.get("ev") == "restart" and isinstance(rec.get("start_bal"), int):
                 last_bal = rec["start_bal"]
-                if not prev_swapped:  # no order before it: the schedule and first rate start at this restart
+                if not prev_swapped:  # no order before it: the schedule, keep and first rate start at this restart
                     anchor_t, anchor_bal, prev_rate0 = rec.get("t"), rec["start_bal"], None
+                    if isinstance(rec.get("keep"), int):
+                        anchor_keep = max(anchor_keep, rec["keep"])  # a restart never keeps less than its start
             elif prev is not None and rec.get("ev") == "end" and isinstance(rec.get("end_bal"), int):
                 last_bal = rec["end_bal"]
         if prev is not None and start_bal > last_bal:  # new coins came in (another night's mining): new session
             say(f"balance {start_bal / 10 ** DECIMALS:,.2f} is above the last session's "
                 f"{last_bal / 10 ** DECIMALS:,.2f}: new session")
-            prev, floor = None, int(prev["keep"])
+            prev, floor = None, int(anchor_keep)
     keep = max(keep, floor)  # a new session never keeps less than the last one did
     if prev is not None:
-        keep = max(int(prev["keep"]), keep)
+        keep = max(int(anchor_keep), keep)
         say(f"restart: keeping {keep / 10 ** DECIMALS:,.2f} coins (first run's keep, journal {a.journal})")
     if a.keep_coins is not None:
         kc = int((a.keep_coins * 10 ** DECIMALS).to_integral_value(rounding=ROUND_CEILING))  # exact, never less
