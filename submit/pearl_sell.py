@@ -43,8 +43,9 @@ Rules this script enforces:
   to sell.jsonl;
 - the exit code is 0 only when the sale is done (nothing sellable left above the kept part, or --max-sell-coins
   reached) and the end balance was read; any other stop exits non-zero after the end record;
-- --max-sell-coins caps what this session sells, whatever the balance reads later (coins that arrive from
-  elsewhere are never sold beyond it).
+- --max-sell-coins caps what this run sells, whatever the balance reads later (coins that arrive from
+  elsewhere are never sold beyond it). It is not journaled as kept: a later run of the same session keeps the
+  most any of its runs kept (the fraction or --keep-coins), not this run's cap.
 
 Usage:
   python3 pearl_sell.py plan                 # read-only: balance, target, one reference quote
@@ -384,8 +385,8 @@ def _cmd_run(a):
             raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} {NOTHING_SOLD}")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
     prev, last_bal, floor, prev_rate0, prev_swapped = None, None, 0, None, False
-    anchor_t = anchor_bal = anchor_keep = None  # the session's start, or its last restart before the first order
-    pending_keep = None  # the keep of the last restart before any order; it counts only once that run sends one
+    anchor_t = anchor_bal = None  # the session's start, or its last restart before the first order
+    anchor_keep = None  # the most any run of the session kept (journaled keeps never include --max-sell-coins)
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
         for line in open(a.journal, encoding="utf-8", errors="replace"):
             try:
@@ -395,8 +396,6 @@ def _cmd_run(a):
             if not isinstance(rec, dict):
                 continue
             if prev is not None and rec.get("ev") == "swap":  # only real runs send swaps (a dry run writes dry_fill)
-                if not prev_swapped and pending_keep is not None:
-                    anchor_keep = max(anchor_keep, pending_keep)  # never below the start's
                 prev_swapped = True
                 continue
             args = rec.get("args")
@@ -404,7 +403,7 @@ def _cmd_run(a):
                 continue
             if rec.get("ev") == "start" and isinstance(rec.get("start_bal"), int) and isinstance(rec.get("keep"), int):
                 prev, last_bal, prev_rate0, prev_swapped = rec, rec["start_bal"], None, False
-                anchor_t, anchor_bal, anchor_keep, pending_keep = rec.get("t"), rec["start_bal"], rec["keep"], None
+                anchor_t, anchor_bal, anchor_keep = rec.get("t"), rec["start_bal"], rec["keep"]
             elif prev is not None and rec.get("ev") == "rate0" and not prev_swapped:  # the rate the swaps went by
                 try:
                     r0 = Decimal(str(rec.get("rate0")))
@@ -413,9 +412,10 @@ def _cmd_run(a):
                     pass
             elif prev is not None and rec.get("ev") == "restart" and isinstance(rec.get("start_bal"), int):
                 last_bal = rec["start_bal"]
-                if not prev_swapped:  # no order before it: the schedule, keep and first rate start at this restart
+                if isinstance(rec.get("keep"), int):  # a run that kept more (--keep-coins) raises it for the rest
+                    anchor_keep = max(anchor_keep, rec["keep"])
+                if not prev_swapped:  # no order before it: the schedule and first rate start at this restart
                     anchor_t, anchor_bal, prev_rate0 = rec.get("t"), rec["start_bal"], None
-                    pending_keep = rec["keep"] if isinstance(rec.get("keep"), int) else None
             elif prev is not None and rec.get("ev") == "end" and isinstance(rec.get("end_bal"), int):
                 last_bal = rec["end_bal"]
         if prev is not None and start_bal > last_bal:  # new coins came in (another night's mining): new session
@@ -431,13 +431,14 @@ def _cmd_run(a):
         if kc < keep and prev is not None:
             raise SystemExit("--keep-coins is below this session's kept amount")
         keep = kc
-    max_sell = None  # raw units this session may sell at most
+    session_keep = keep  # journaled: what later runs of this session inherit (never this run's --max-sell-coins)
+    max_sell = None  # raw units this run may sell at most
     if a.max_sell_coins is not None:
         max_sell = int((a.max_sell_coins * 10 ** DECIMALS).to_integral_value(rounding=ROUND_FLOOR))
         keep = max(keep, start_bal - max_sell)
     say(f"start balance {start_bal / 10 ** DECIMALS:,.2f}; keeping {keep / 10 ** DECIMALS:,.2f}; "
         f"selling {(start_bal - keep) / 10 ** DECIMALS:,.2f}")
-    j.write(ev="start" if prev is None else "restart", start_bal=start_bal, keep=keep,
+    j.write(ev="start" if prev is None else "restart", start_bal=start_bal, keep=session_keep, run_keep=keep,
             args={k: (str(v) if isinstance(v, Decimal) else v) for k, v in vars(a).items()})
     STARTED[0] = True
     chunk, failed, waits, swaps, lwaits, sold_req = a.chunk, 0, 0, 0, 0, 0  # sold_req: coins in finished orders

@@ -889,6 +889,27 @@ err = run("wallet address fails three times", e, ["run", "--mode", "now"])
 expect("v0.1.4: three failed wallet-address calls: refused before any sale, nothing sold",
        err is not None and "before any sale" in err and e.swaps == [] and e.wallet_calls == 3)
 
+# 77. a run after the first order that keeps more (--keep-coins) raises the keep for the rest of the session
+tmpd = tempfile.mkdtemp(prefix="sell-keepup-")
+e = Env(300_000)
+run("keep up 1: one order", e, ["run", "--mode", "now", "--max-swaps", "1"], tmp=tmpd)
+run("keep up 2: --keep-coins 150000", e, ["run", "--mode", "now", "--keep-coins", "150000"], tmp=tmpd)
+n_before = len(journal_events(tmpd))
+run("keep up 3: no flags", e, ["run", "--mode", "now"], tmp=tmpd)
+r3 = next(r for r in journal_events(tmpd)[n_before:] if r.get("ev") == "restart")
+expect("v0.1.4: run 2 raised the keep to 150,000 after run 1's order; run 3 without flags keeps 150,000",
+       r3.get("keep") == 150_000 * 10 ** 8 and e.bal == 150_000 * 10 ** 8 and e.swaps == [100_000, 50_000])
+
+# 78. --max-sell-coins caps one run only: the journal keeps the real keep, so a later run can sell the rest
+tmpd = tempfile.mkdtemp(prefix="sell-cap-run-")
+e = Env(300_000)
+run("cap 1: --max-sell-coins 50000", e, ["run", "--mode", "now", "--max-sell-coins", "50000"], tmp=tmpd)
+st = next(r for r in journal_events(tmpd) if r.get("ev") == "start")
+run("cap 2: no flags", e, ["run", "--mode", "now"], tmp=tmpd)
+expect("v0.1.4: the capped run journals keep 60,000 (run_keep 250,000), sells 50,000; the next run sells down to "
+       "60,000", st.get("keep") == 60_000 * 10 ** 8 and st.get("run_keep") == 250_000 * 10 ** 8
+       and e.swaps[0] == 50_000 and e.bal == 60_000 * 10 ** 8)
+
 # 73. plan quotes with the --slippage it is given (it used the old 1.5 constant)
 seen_slip = []
 e = Env(300_000)

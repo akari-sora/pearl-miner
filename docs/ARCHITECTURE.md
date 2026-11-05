@@ -210,7 +210,8 @@ files together.
   order, and `pearl.py` then prints the command to sell later); `--mode trail` waits and quotes again, and says the
   same when it gives up without an order. Both limits are checked on the quotes before each swap; `baw market-order
   swap` takes no minimum output, so the fill itself is bounded only by `--slippage` against baw's own quote. A
-  restart keeps the schedule and the first rate of the run that sent the session's first order; a session from
+  restart keeps the schedule and the first rate of the run that sent the session's first order, and the most any
+  run of the session kept (`--max-sell-coins` caps one run only and is never journaled as kept); a session from
   v0.1.3 or earlier has no first rate in its journal, so its restart takes the rate at that moment. Until v0.1.3
   the cap was 2% and there was no floor; on 2026-11-04 the pool was about 0.01 BNB deep, 23,958 coins took 42%
   impact, and a 2% cap would have sold nothing while the price fell 88% within 268 s of the opening.
