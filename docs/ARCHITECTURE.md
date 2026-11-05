@@ -221,8 +221,8 @@ files together.
 - Swaps go through `baw market-order swap --mev true` with a slippage cap. After a swap it polls the order to
   `FINISHED` / `FAILED`; an order whose state is unknown stops the script instead of being sent again.
 - Progress is measured from the on-chain token balance, never from assumed fills. Restarts read `sell.jsonl` and keep
-  the first session's kept amount.
-- `--max-sell-coins` caps what the session sells, whatever the balance shows later; `--keep-coins` and
+  the most any run of the session kept (the fraction or `--keep-coins`; never another run's `--max-sell-coins`).
+- `--max-sell-coins` caps what one run sells, whatever the balance shows later; `--keep-coins` and
   `--max-sell-coins` are exact decimals.
 - `SIGINT`, `SIGTERM` and (Windows) `SIGBREAK` only set a flag: the loop stops at its `STOP` check, after an order in
   flight was followed to `FINISHED` / `FAILED` and journaled; a signal or the `STOP` file also cuts a wait short.
