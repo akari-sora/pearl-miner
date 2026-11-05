@@ -856,6 +856,19 @@ expect("v0.1.4: chain: session 3's schedule counts from session 2 (the first tha
        "session 1's no-order start", ticks and abs(ticks[0]["el"] - (ticks[0]["t"] - t_s2) / 60) < 0.1
        and t_s2 - t_s1 > 80 * 60 and len(e.swaps) >= 2)
 
+# 75. no-order restarts do not ratchet the keep: a restart that sent no order (here with --max-sell-coins) leaves
+#     the session's keep where it was, so the next run keeps the start's 60,000, not that run's 200,000
+tmpd = tempfile.mkdtemp(prefix="sell-ratchet-")
+e = Env(300_000)
+run("ratchet 1: now, no order", e, ["run", "--mode", "now", "--max-impact", "0.0001"], tmp=tmpd)
+run("ratchet 2: now, no order, max-sell", e, ["run", "--mode", "now", "--max-impact", "0.0001", "--max-sell-coins",
+                                               "100000"], tmp=tmpd)
+n_before = len(journal_events(tmpd))
+run("ratchet 3: now", e, ["run", "--mode", "now", "--max-swaps", "1"], tmp=tmpd)
+r3 = next(r for r in journal_events(tmpd)[n_before:] if r.get("ev") == "restart")
+expect("v0.1.4: a no-order restart does not raise the session's keep (60,000 stays, not 200,000)",
+       r3.get("keep") == 60_000 * 10 ** 8 and e.swaps == [100_000])
+
 # 73. plan quotes with the --slippage it is given (it used the old 1.5 constant)
 seen_slip = []
 e = Env(300_000)
