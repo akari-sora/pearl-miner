@@ -56,6 +56,7 @@ CLEAN_STOP_RES = [re.compile(p) for p in (
     r"deadline$", r"chain moved past day \d+$", r"None$")]
 SELLER_TRAILER = "stopped before the sale was done"  # pearl_sell.py's general last line; its reason is above it
 NOTHING_SOLD = "before any sale"  # pearl_sell.py stopped before its start record: nothing was sold
+NO_ORDER = "this session placed no order"  # pearl_sell.py's last line after a stop that sent no order (v0.1.4)
 CRASH_RE = re.compile(r"\bcrash in \w+: ")  # pearl_submit.py's line when a worker crashed, even after a stop
 LOCKED_TEXT = "another run already holds"  # pearl_submit.py's refusal when the journal is locked
 DECIMALS = 8
@@ -585,7 +586,8 @@ def cmd_auto(a):
                     full = next((x for x in reversed(slines) if x.strip() and not SOLD_RE.search(x)
                                  and SELLER_TRAILER not in x), "no output").strip()
                     last = full[:200]
-                    if NOTHING_SOLD in full:  # the whole line: a long path can push the marker past 200 chars
+                    if NOTHING_SOLD in full or any(NO_ORDER in x for x in slines):  # whole lines: a long path can
+                        # push the marker past 200 chars; NO_ORDER covers a STOP, a signal or bad quotes before any order
                         sold_line = "skipped: the seller stopped before any sale"
                         code, reason = EXIT_SALE, (f"the seller stopped before any sale (exit {src}): {last}. Nothing "
                                                    f"was sold. To sell later: "

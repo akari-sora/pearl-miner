@@ -125,6 +125,11 @@ if mode == "partial":  # like pearl_sell stopped part way: its reason, the end b
     print("12:01:00 end balance 5,000.00 珍珠币 (sold 6,000.00); BNB from finished orders ≈ 0.0100", flush=True)
     sys.exit("stopped before the sale was done (see the line above); some coins may be sold already: check the "
              "balance and sell.jsonl before selling more")
+if mode == "no-order":  # like pearl_sell v0.1.4 stopped after its start record but before any order
+    print("12:01:00 STOP file: stopping")
+    print("12:01:00 end balance 11,000.00 珍珠币 (sold 0.00); BNB from finished orders ≈ 0", flush=True)
+    sys.exit("stopped before the sale was done (see the line above); this session placed no order: check the "
+             "balance and sell.jsonl before selling more")
 if mode == "slow":  # like pearl_sell: a signal only sets a flag; this one never stops on it
     for name in ("SIGINT", "SIGBREAK"):
         if hasattr(signal, name):
@@ -629,6 +634,12 @@ rc = e.run(["--yes"], env={"FAKE_SELL": "refuse-long"})
 expect("S4-1: a refusal whose marker sits past 200 characters still says 'Nothing was sold' with the sell command",
        rc == 4 and "Nothing was sold" in e.err and "To sell later: python3 submit/pearl_sell.py run" in e.err
        and "may be sold already" not in e.err.lower(), (rc, e.err))
+e = Env()
+rc = e.run(["--yes"], env={"FAKE_SELL": "no-order"})
+expect("v0.1.4: the seller stopped after its start record without an order (a STOP, a signal, bad quotes): "
+       "'Nothing was sold' and the sell command, with the seller's own reason",
+       rc == 4 and "Nothing was sold" in e.err and "To sell later: python3 submit/pearl_sell.py run" in e.err
+       and "STOP file: stopping" in e.err and "may be sold already" not in e.err.lower(), (rc, e.err))
 e = Env()
 rc = e.run(["--yes"], env={"FAKE_SELL": "partial"})
 expect("N4: the seller stopped after it started: the message says coins may be sold already, see status and sell.log",
