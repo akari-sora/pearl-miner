@@ -1065,6 +1065,21 @@ def _main():
     expect("N6: a worker crash is printed as 'crash in tracker: ...' even when stop() keeps an earlier reason",
            any(x.startswith("crash in tracker: KeyError") for x in said) and stops6 == ["crash in tracker: KeyError('x')"])
 
+    # a closed stdout (the reader of a pipe is gone): printing the crash line fails, the stop must still happen
+    def broken_say(*x):
+        raise BrokenPipeError(32, "Broken pipe")
+    stops7 = []
+    fake7 = types.SimpleNamespace(j=types.SimpleNamespace(write=lambda **k: None), stop=stops7.append)
+    ps.say, raised = broken_say, None
+    try:
+        ps.Runner.guarded(fake7, tracker)
+    except Exception as e:  # noqa: BLE001
+        raised = e
+    finally:
+        ps.say = saved_say
+    expect("v0.1.4: a worker crash with stdout gone still stops the run (stop before the print; the print error is "
+           "swallowed)", stops7 == ["crash in tracker: KeyError('x')"] and raised is None)
+
     print(f"[summary] {checks[0]} checks")
     print("FAILED:", fails if fails else "none")
     return 1 if fails else 0

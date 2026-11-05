@@ -137,14 +137,18 @@ def baw(args, timeout=60):
         return {"success": False, "error": {"code": "NO_JSON", "message": (out or err)[:300]}}
 
 
-def baw_wallet_address():
-    """BSC address of the wallet baw is signed in to (lower case), or None if `baw wallet address` does not say."""
-    r = baw(["wallet", "address"])
-    d = r.get("data") if r.get("success") is True else None
-    items = d.get("addresses") if isinstance(d, dict) else None
-    for x in items if isinstance(items, list) else []:
-        if isinstance(x, dict) and str(x.get("binanceChainId")) == CHAIN and isinstance(x.get("address"), str):
-            return x["address"].lower()
+def baw_wallet_address(tries=3):
+    """BSC address of the wallet baw is signed in to (lower case), or None if `baw wallet address` does not say so
+    in `tries` calls 2 s apart (one backend blip after a long run must not cancel the whole sale)."""
+    for i in range(tries):
+        if i:
+            sleep(2)
+        r = baw(["wallet", "address"])
+        d = r.get("data") if r.get("success") is True else None
+        items = d.get("addresses") if isinstance(d, dict) else None
+        for x in items if isinstance(items, list) else []:
+            if isinstance(x, dict) and str(x.get("binanceChainId")) == CHAIN and isinstance(x.get("address"), str):
+                return x["address"].lower()
     return None
 
 

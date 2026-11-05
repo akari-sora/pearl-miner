@@ -94,6 +94,9 @@ class Env:
     def baw(self, args, timeout=60):
         cmd = args[:2]
         if cmd == ["wallet", "address"]:
+            self.wallet_calls = getattr(self, "wallet_calls", 0) + 1
+            if self.wallet_calls <= getattr(self, "wallet_blips", 0):
+                return {"success": False, "error": {"code": "TIMEOUT", "message": "baw wallet address timed out"}}
             if not self.signed_in:
                 return {"success": False, "error": {"code": "X", "message": "not signed in"}}
             return {"success": True, "data": {"addresses": [
@@ -868,6 +871,23 @@ run("ratchet 3: now", e, ["run", "--mode", "now", "--max-swaps", "1"], tmp=tmpd)
 r3 = next(r for r in journal_events(tmpd)[n_before:] if r.get("ev") == "restart")
 expect("v0.1.4: a no-order restart does not raise the session's keep (60,000 stays, not 200,000)",
        r3.get("keep") == 60_000 * 10 ** 8 and e.swaps == [100_000])
+n_before = len(journal_events(tmpd))
+run("ratchet 4: now, after the order", e, ["run", "--mode", "now", "--max-swaps", "1"], tmp=tmpd)
+r4 = next(r for r in journal_events(tmpd)[n_before:] if r.get("ev") == "restart")
+expect("v0.1.4: ... and after run 3's order the next restart still keeps 60,000 (run 2's 200,000 never counts)",
+       r4.get("keep") == 60_000 * 10 ** 8 and e.swaps == [100_000, 100_000])
+
+# 76. one or two failed `baw wallet address` calls (a backend blip) do not cancel the sale; three do (fail closed)
+e = Env(300_000)
+e.wallet_blips = 2
+err = run("wallet address blips twice", e, ["run", "--mode", "now"])
+expect("v0.1.4: two wallet-address blips: asked again 2 s apart, then sold the 80%",
+       err is None and e.wallet_calls == 3 and e.bal == 60_000 * 10 ** 8)
+e = Env(300_000)
+e.wallet_blips = 3
+err = run("wallet address fails three times", e, ["run", "--mode", "now"])
+expect("v0.1.4: three failed wallet-address calls: refused before any sale, nothing sold",
+       err is not None and "before any sale" in err and e.swaps == [] and e.wallet_calls == 3)
 
 # 73. plan quotes with the --slippage it is given (it used the old 1.5 constant)
 seen_slip = []
