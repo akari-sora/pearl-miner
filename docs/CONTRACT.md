@@ -158,8 +158,8 @@ BNB with a 0.3726% fee. That evening its active liquidity was about `L = 7.06e17
 per BNB, so a 100k-coin sale moved the price by about 0.2%. One day later it was a different market: on
 2026-11-04 the pool was about 0.01 BNB deep, a 20,000-coin sale took about 37% price impact and 23,958 coins took
 42%, and the price fell 88% within 268 s of the opening as the day's miners sold. Liquidity and price can change at
-any moment. `pearl_sell.py` quotes before every chunk and halves chunks above a price-impact cap (50% since v0.1.4;
-2% before, which sold nothing on 2026-11-04).
+any moment. `pearl_sell.py` quotes before every chunk, halves chunks above a price-impact cap (50% per chunk since v0.1.4;
+2% before, which sold nothing on 2026-11-04) and never sells below half the session's first rate (`--floor`).
 
 Unrelated projects named "Pearl" or "PRL" (for example a proof-of-useful-work chain) have nothing to do with this
 contract.

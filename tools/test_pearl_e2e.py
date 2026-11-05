@@ -133,7 +133,7 @@ import json, os, signal, sys, time
 d, repo = os.environ["E2E_DIR"], os.environ["E2E_REPO"]
 sys.path.insert(0, os.path.join(repo, "submit"))
 import pearl_sell as ps
-COIN, RATE, DEPTH = 10 ** 8, 1 / 431426, 30_000
+COIN, RATE, DEPTH = 10 ** 8, 1 / 431426, int(os.environ.get("E2E_DEPTH", "30000"))
 orders, clock, after_fill = {}, [1_800_000_000.0], [0]
 
 
@@ -265,6 +265,7 @@ SCENARIOS = {  # name: extra environment
     "late": {"E2E_CAP": "64", "E2E_LATE": "3", "E2E_STRANGER": "5000"},  # 4 txs; the 4th's coins land late
     "ctrlc-sale": {"E2E_SELL_HOLD": "1"},
     "stop-sale": {"E2E_SELL_HOLD": "1"},
+    "thin-sale": {"E2E_DEPTH": "15000"},  # 20,000 coins = 54% impact: over the 50% cap even at the smallest chunk
 }
 
 
@@ -512,6 +513,12 @@ def outer():
                 expect("stop-sale: the seller exits non-zero, so pearl.py exits 4 and says coins may be sold already",
                        rc == "4" and "seller stopped before it was done" in err and "Some coins may be sold already" in err
                        and "STOP file: stopping" in err and "stopped before the sale was done" not in err, (rc, err[-400:]))
+            elif scenario == "thin-sale":
+                expect("thin-sale: the pool is too thin even at the smallest chunk: no order, the seller says so, "
+                       "pearl.py exits 4, says nothing was sold and prints the command to sell later",
+                       rc == "4" and not swaps and "at the smallest chunk (20,000 coins): stopping before any sale" in err
+                       and "the seller stopped before any sale" in err and "Nothing was sold" in err
+                       and "To sell later: python3 submit/pearl_sell.py run --mode now" in err, (rc, swaps, err[-500:]))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     print("FAILED:", failed or "none", flush=True)

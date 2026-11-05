@@ -202,10 +202,14 @@ files together.
 - `plan` is read-only: balance, the amount to sell, one reference quote.
 - `run` sells `--fraction` (80%) of the balance in chunks of up to `--chunk` (100k) coins and keeps the rest.
   Every chunk gets a 1,000-coin reference quote and a chunk quote; `impact = 1 − chunk rate / reference rate`. Above
-  `--max-impact` (50%) the chunk is halved down to `--min-chunk`. Still above it there, `--mode now` stops at once
-  (exit non-zero) and `--mode trail` waits and quotes again. Until v0.1.3 the cap was 2%; on 2026-11-04 the pool
-  was about 0.01 BNB deep, 23,958 coins took 42% impact, and a 2% cap would have sold nothing while the price fell
-  88% within 268 s of the opening.
+  `--max-impact` (50%) the chunk is halved down to `--min-chunk`. That limit compares with the price right now, so
+  a second one, `--floor` (0.5), compares with the session's first rate (the lower of two reference quotes, kept in
+  `sell.jsonl` across a restart): no chunk sells below half of it, however many chunks came before or however far
+  the market fell meanwhile (`--floor 0` turns it off). Over either limit at the smallest chunk, `--mode now` quotes
+  again twice 10 s apart and then stops (exit non-zero; its line says "before any sale" when the session placed no
+  order, and `pearl.py` then prints the command to sell later); `--mode trail` waits and quotes again. Until v0.1.3
+  the cap was 2% and there was no floor; on 2026-11-04 the pool was about 0.01 BNB deep, 23,958 coins took 42%
+  impact, and a 2% cap would have sold nothing while the price fell 88% within 268 s of the opening.
 - `--mode trail` (default) waits for a pullback of `--pullback` (7%) from the running high of the price, or for a
   linear schedule that starts after `--warmup` (20 min) and reaches 100% at `--deadline` (120 min). `--mode now`
   sells at once.

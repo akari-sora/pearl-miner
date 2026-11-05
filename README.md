@@ -93,7 +93,7 @@ Every term used in this guide, in plain language:
 - **`daily cap`**: the maximum number of coins the contract allows everyone combined to mine per day—**20,000,000 coins** (1/50 of the 1,000,000,000 max supply). The cap resets every day at **19:08:54 UTC+8 (11:08:54 UTC)**.
 - **`journal`**: an append-only local file (`submit/journal.jsonl` for submitting, `submit/sell.jsonl` for selling) flushed to disk (`fsync`) before every action. Before sending any batch, the submitter writes an `attempt` record to lock those proofs; unless a receipt later proves that exact transaction reverted, or the wallet rejected it with `351716` before broadcast, those proofs are never sent again—even after a crash or reboot.
 - **`fork simulation`**: a dress rehearsal using Foundry's `anvil` that clones BSC mainnet into local memory (`127.0.0.1:8547`) and pairs it with a fake `baw` to test the live day rollover and a simulated competitor without touching your real wallet or spending any BNB.
-- **`MEV` (Maximal Extractable Value)**: bots on public blockchains that watch pending swaps and sandwich them to profit from your slippage. `pearl_sell.py` enables the wallet's MEV protection (passed internally to `baw` as `--mev true`; you do not pass this flag yourself), caps price impact per chunk (default 50%, `--max-impact 0.5`), and caps slippage (default 3%, `--slippage 3`). The pool is very thin: on 2026-11-04 selling 23,958 coins took 42% impact, and a 2% cap (the default until v0.1.3) sold nothing while the price fell 88% within 4.5 minutes of the opening.
+- **`MEV` (Maximal Extractable Value)**: bots on public blockchains that watch pending swaps and sandwich them to profit from your slippage. `pearl_sell.py` enables the wallet's MEV protection (passed internally to `baw` as `--mev true`; you do not pass this flag yourself), caps price impact per chunk against the current price (default 50%, `--max-impact 0.5`), never sells below half the price the sale started at (`--floor 0.5`), and caps slippage (default 3%, `--slippage 3`). The pool is very thin: on 2026-11-04 selling 23,958 coins took 42% impact, and a 2% cap (the default until v0.1.3) sold nothing while the price fell 88% within 4.5 minutes of the opening.
 
 ---
 
@@ -297,7 +297,7 @@ Every term used in this guide, in plain language:
 
 ### Step 7: Sell part of it (only after the run has finished)
 
-- **What it does**: sells a fraction of your wallet's 珍珠币 for BNB in chunks through `baw market-order`. By default it sells **80%** (`--fraction 0.8`) and keeps 20%, in chunks of up to **100,000 coins** (`--chunk 100000`), checking each chunk against a 1,000-coin reference quote so price impact never exceeds **50%** (`--max-impact 0.5`; a chunk above it is halved, and if even the 20,000-coin minimum is above it, `--mode now` stops without selling), with MEV protection (passed internally to `baw` as `--mev true`; you do not pass this flag yourself) and a **3%** slippage cap (`--slippage 3`). 50% sounds high, but the pool is that thin: on 2026-11-04 a 2% cap would have sold nothing while the price fell 88%.
+- **What it does**: sells a fraction of your wallet's 珍珠币 for BNB in chunks through `baw market-order`. By default it sells **80%** (`--fraction 0.8`) and keeps 20%, in chunks of up to **100,000 coins** (`--chunk 100000`), checking each chunk against a 1,000-coin reference quote so a chunk's price impact never exceeds **50%** of the current price (`--max-impact 0.5`), and never selling below **half** the price the sale started at (`--floor 0.5`), so many chunks in a row cannot walk the price down without limit. A chunk over either limit is halved; if even the 20,000-coin minimum is over, `--mode now` stops and sells nothing more, with MEV protection (passed internally to `baw` as `--mev true`; you do not pass this flag yourself) and a **3%** slippage cap (`--slippage 3`). 50% sounds high, but the pool is that thin: on 2026-11-04 a 2% cap would have sold nothing while the price fell 88%.
 - **Important guards**:
   1. The seller refuses while the process in `submit/run.pid` is alive, and also when that file is missing, so start the mining run as shown in step 6 (and **never create `run.pid` by hand**).
   2. It also refuses unless `PEARL_WALLET` is the wallet `baw` is signed in to (it asks `baw wallet address`): balances are read for the address you give, but swaps leave from the signed-in wallet.
@@ -344,7 +344,7 @@ Every term used in this guide, in plain language:
 2. **Stops instead of guessing**: if a preview reports any risk warning, asks for mobile app confirmation, returns an incomplete response, or fails simulation for an unexplained reason, the submitter stops cleanly instead of gambling your gas.
 3. **Hard gas budget and keep reserve**: spending is capped at `min(--budget-bnb, start balance − --keep-bnb)` (defaults: `--budget-bnb 0.045` BNB, `--keep-bnb 0.005` BNB), counting confirmed fees, reserved fees for unknown outcomes, and 1.5× estimates for every transaction in flight.
 4. **Splits batches near the cap**: because a 16-proof transaction reverts all-or-nothing if even one proof does not fit in the remaining daily cap, the submitter re-reads the chain near the 20M cap, subtracts its own in-flight proofs, and shrinks the batch to fit.
-5. **Protected selling**: the seller checks that the mining run has finished and that `baw` is signed in to `--wallet`, quotes every chunk against a 1,000-coin reference quote to cap price impact at 50%, enables MEV protection, measures progress strictly from on-chain token balances, and never resubmits an order in an unknown state.
+5. **Protected selling**: the seller checks that the mining run has finished and that `baw` is signed in to `--wallet`, quotes every chunk against a 1,000-coin reference quote to cap each chunk's price impact at 50% and never sells below half the starting price, enables MEV protection, measures progress strictly from on-chain token balances, and never resubmits an order in an unknown state.
 
 ### Technical summary table
 
@@ -358,7 +358,7 @@ Every term used in this guide, in plain language:
 | **STOP file** | `touch submit/STOP` (or Ctrl-C / SIGTERM, or the deadline) stops the run between steps. The seller honours the same file. Delete it before the next start. |
 | **Near-cap splitting** | Before each send close to the cap the room is read again, minus our own in-flight proofs; a batch that would revert whole is split to fit. |
 | **Input checks** | The wallet must be `0x` + 40 hex digits, with a valid EIP-55 checksum when it is mixed case; the handle must pass the registry's `isValidHandle` (`a-z0-9`, 3 to 20 characters); `--seed` and `--wallet` given together must agree; `--min-reward` is at least 1 coin. `check` confirms on chain that the handle belongs to the wallet, and the seller refuses a `--wallet` that is not the wallet `baw` is signed in to. |
-| **MEV-protected sells with an impact cap** | Every chunk is quoted against a small reference quote; above 50% impact it is halved (in `--mode now`, if even the minimum chunk is above it, the sale stops). Swaps use the wallet's MEV protection and a slippage cap; an order in an unknown state is never resubmitted. |
+| **MEV-protected sells with an impact cap** | Every chunk is quoted against a small reference quote; above 50% impact, or below half the sale's starting price, it is halved (in `--mode now`, if even the minimum chunk is, the sale stops and sells nothing more). Swaps use the wallet's MEV protection and a slippage cap; an order in an unknown state is never resubmitted. |
 
 ---
 
@@ -453,7 +453,7 @@ Yes. The fake `baw` refuses any RPC other than `127.0.0.1`, the submitter's RPC 
 - **Stops instead of guessing**: any preview risk warning, any unexplained simulation failure, the gas budget, the `STOP` file or the deadline ends the run cleanly.
 - **Splits batches near the cap** instead of letting a whole 16-proof transaction revert.
 - **No private key anywhere**: the Binance Agentic Wallet is MPC; the tools only drive its CLI.
-- **Proven before mainnet**: six offline test suites (**88** checks for the submitter, **102** for the seller, **38** for the log redaction, **143** for the one-command `pearl.py`, **17** for the miner's launch sizing, **35** for `pearl.py` end to end with real signals), run on macOS, Linux and Windows ([PLATFORMS.md](docs/PLATFORMS.md)), and a full fork simulation against the real contract with a live opening and a competitor eating the cap.
+- **Proven before mainnet**: six offline test suites (**88** checks for the submitter, **110** for the seller, **38** for the log redaction, **143** for the one-command `pearl.py`, **17** for the miner's launch sizing, **38** for `pearl.py` end to end with real signals), run on macOS, Linux and Windows ([PLATFORMS.md](docs/PLATFORMS.md)), and a full fork simulation against the real contract with a live opening and a competitor eating the cap.
 - **Standard library only** for the submitter and the seller: copy `pearl_submit.py` (and `pearl_sell.py`, which imports its address checks) to the machine with the wallet session.
 
 ### Pipeline diagram
@@ -484,7 +484,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · contract facts: [docs/C
 
 ![Fork simulation on anvil](demo/simulation.gif)
 
-**Offline test suites**: the submitter against a fake chain and a fake `baw` (88 checks); the seller against a pool model calibrated on the real pool (102 checks); the log redaction rules (38 checks); `pearl.py` with fake child scripts (143 checks); the miner's launch sizing (17 checks); and `pearl.py` with the real submitter and seller on a fake chain and market, stopped by STOP and real Ctrl-C (35 checks). The list and how to run them: [docs/QUICKSTART.md](docs/QUICKSTART.md#check-the-code-yourself-optional). ([MP4](demo/tests.mp4))
+**Offline test suites**: the submitter against a fake chain and a fake `baw` (88 checks); the seller against a pool model calibrated on the real pool (110 checks); the log redaction rules (38 checks); `pearl.py` with fake child scripts (143 checks); the miner's launch sizing (17 checks); and `pearl.py` with the real submitter and seller on a fake chain and market, stopped by STOP and real Ctrl-C (38 checks). The list and how to run them: [docs/QUICKSTART.md](docs/QUICKSTART.md#check-the-code-yourself-optional). ([MP4](demo/tests.mp4))
 
 ![Both offline test suites passing](demo/tests.gif)
 
@@ -502,12 +502,12 @@ submit/
   export_proofs.py     proofs.csv -> verified proofs.json
   pearl_sell.py        the seller: plan / run [--dry-run]
   test_submit.py       offline tests for the submitter (88 checks)
-  test_sell.py         offline tests for the seller (102 checks)
+  test_sell.py         offline tests for the seller (110 checks)
   fork_rehearsal/      anvil fork simulation + fake baw (127.0.0.1 only)
 tools/replay_log.py    replay a run log with its timing, anonymized
 tools/test_replay_log.py  offline tests for the redaction (38 checks)
 tools/test_pearl_autopilot.py  offline tests for pearl.py (143 checks)
-tools/test_pearl_e2e.py  pearl.py end to end: real submitter and seller, real signals (35 checks)
+tools/test_pearl_e2e.py  pearl.py end to end: real submitter and seller, real signals (38 checks)
 demo/                  vhs tapes, GIF / MP4 renders, the anonymized day-1 log
 docs/                  QUICKSTART, AGENTS-SETUP, PLATFORMS, CONTRACT.md, ARCHITECTURE.md
 ```

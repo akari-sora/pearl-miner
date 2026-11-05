@@ -4,7 +4,8 @@
 """Sell a fraction of the wallet's 珍珠币 for BNB in chunks through `baw market-order` (Binance Web3 Wallet).
 
 Default policy: after the mining run has finished, sell 80% in chunks of about 100k coins,
-quoting first; halve a chunk whose price impact exceeds 50%; keep the rest.
+quoting first; halve a chunk whose price impact exceeds 50% (--max-impact) and never sell below half the
+session's first rate (--floor); keep the rest.
 Wallet: --wallet or env PEARL_WALLET (the Agentic Wallet address that holds the coins).
 
 Timing (--mode trail, default; from the pool's history): do not dump at the moment the day's cap fills.
@@ -22,9 +23,14 @@ Rules this script enforces:
 - refuses to start while the mining run is alive, or when submit/run.pid is missing (start the mining run with
   `& echo $! > submit/run.pid`, or on Windows with Start-Process -PassThru, see docs/PLATFORMS.md): one tx per
   address at a time;
-- every chunk: a small reference quote and a chunk quote; impact = 1 - chunk rate / reference rate;
-  above --max-impact the chunk is halved down to --min-chunk; still above it there, --mode now stops at once
-  (exit non-zero, nothing more sold) and --mode trail waits and re-quotes;
+- every chunk: a small reference quote and a chunk quote; impact = 1 - chunk rate / reference rate, at most
+  --max-impact. That compares with the price right now, so a second limit, --floor (default 0.5), holds against the
+  session's first rate (the lower of two reference quotes, kept in the journal across a restart): no chunk sells
+  below --floor x that rate, so many chunks in a row, or a market falling meanwhile, cannot walk the sale down
+  without limit (--floor 0 turns it off). A chunk over either limit is halved down to --min-chunk; still over at
+  the smallest chunk,
+  --mode now quotes again twice 10 s apart and then stops (exit non-zero, nothing more sold; its line says
+  "before any sale" when this session placed no order) and --mode trail waits 2 x --gap and re-quotes;
 - why the cap is 50% (--max-impact 0.5) and slippage 3% (until v0.1.3: 2% and 1.5%): on 2026-11-04 the only pool
   was about 0.01 BNB deep. Selling 23,958 coins took 42% impact, so a 2% cap sold nothing and kept waiting while
   the price fell 88% within 268 s of the opening. In a pool this thin the impact is highest exactly when the
@@ -80,7 +86,7 @@ def sleep(sec):
 SIGNALLED = [False]  # set by Ctrl-C / SIGTERM / Ctrl-Break; the loop stops at its next STOP check
 STOP_FILE = [None]   # set by cmd_run: the STOP file cuts a pause short too
 STARTED = [False]    # set once the start record is written: before it, nothing can have been sold
-NOTHING_SOLD = "before any sale"  # in every message of a stop before the start record (pearl.py looks for it)
+NOTHING_SOLD = "before any sale"  # every stop before the start record, and a stop that placed no order (pearl.py looks for it)
 
 
 def on_signal(signum, frame):
@@ -160,7 +166,7 @@ def token_balance():
     raise RuntimeError(f"token balance unreadable: {last}")
 
 
-SLIPPAGE = "1.5"
+SLIPPAGE = "3.0"  # run and plan set it from --slippage
 
 
 def quote(qty):
@@ -274,6 +280,8 @@ def wait_order(order_id, j):
 
 
 def cmd_plan(a):
+    global SLIPPAGE
+    SLIPPAGE = str(a.slippage)
     bal = token_balance()
     say(f"wallet {WALLET} holds {bal / 10 ** DECIMALS:,.2f} 珍珠币; selling {a.fraction:.0%} = "
         f"{int(bal * a.fraction) // 10 ** DECIMALS:,} coins in chunks of up to {a.chunk:,}")
@@ -371,7 +379,7 @@ def _cmd_run(a):
         if stopping():
             raise SystemExit(f"stopped by {'a signal' if SIGNALLED[0] else 'the STOP file'} {NOTHING_SOLD}")
     keep = start_bal - int(Decimal(start_bal) * Decimal(str(a.fraction)))  # raw units that must stay
-    prev, last_bal, floor = None, None, 0
+    prev, last_bal, floor, prev_rate0, prev_swapped = None, None, 0, None, False
     if os.path.exists(a.journal) and not a.dry_run:  # the last session's start, and its last known balance
         for line in open(a.journal, encoding="utf-8", errors="replace"):
             try:
@@ -380,11 +388,20 @@ def _cmd_run(a):
                 continue
             if not isinstance(rec, dict):
                 continue
+            if prev is not None and rec.get("ev") == "swap":  # only real runs send swaps (a dry run writes dry_fill)
+                prev_swapped = True
+                continue
             args = rec.get("args")
             if not isinstance(args, dict) or args.get("dry_run"):  # dry runs (and unmarked records) never count
                 continue
             if rec.get("ev") == "start" and isinstance(rec.get("start_bal"), int) and isinstance(rec.get("keep"), int):
-                prev, last_bal = rec, rec["start_bal"]
+                prev, last_bal, prev_rate0, prev_swapped = rec, rec["start_bal"], None, False
+            elif prev is not None and rec.get("ev") == "rate0" and not prev_swapped:  # the rate the swaps went by
+                try:
+                    r0 = Decimal(str(rec.get("rate0")))
+                    prev_rate0 = r0 if r0.is_finite() and r0 > 0 else None
+                except InvalidOperation:
+                    pass
             elif prev is not None and rec.get("ev") == "restart" and isinstance(rec.get("start_bal"), int):
                 last_bal = rec["start_bal"]
             elif prev is not None and rec.get("ev") == "end" and isinstance(rec.get("end_bal"), int):
@@ -414,8 +431,12 @@ def _cmd_run(a):
     chunk, failed, waits, swaps, lwaits, sold_req = a.chunk, 0, 0, 0, 0, 0  # sold_req: coins in finished orders
     total_bnb = Decimal(0)
     t_start, last_sell, hist, qfail = now(), -1e18, [], 0
+    # a restart keeps the session's schedule and first rate only once that session has sent an order: after a stop
+    # that sent none (e.g. --mode now over the limits), a later --mode trail starts its warmup and rate afresh
+    rate0 = prev_rate0 if prev is not None and prev_swapped else None
+    cap, fl, now_tries = Decimal(str(a.max_impact)), Decimal(str(a.floor)), 0
     start_sellable = max(1, start_bal - keep)
-    if prev is not None:  # the schedule continues from the first run
+    if prev is not None and prev_swapped:  # the schedule continues from the first run
         t_start = float(prev.get("t", t_start))
         start_sellable = max(1, int(prev["start_bal"]) - keep)
     done = False  # only the two normal ends set it; any other stop makes the script exit non-zero
@@ -448,6 +469,14 @@ def _cmd_run(a):
             pause(a.poll)
             continue
         qfail = 0
+        if rate0 is None:  # the lower of two quotes, so one high outlier cannot set it
+            ref2, _ = quote(REF_QTY)
+            if ref2 is not None:
+                ref = min(ref, ref2)
+            rate0 = ref / REF_QTY
+            j.write(ev="rate0", rate0=str(rate0), args={"dry_run": a.dry_run})
+            say(f"session's first rate {rate0:.10f} BNB per coin"
+                + (f"; no chunk sells below {fl:.0%} of it (--floor)" if fl > 0 else "; --floor 0: no floor"))
         raw_rates = (hist[-1][1] if hist else [])[-2:] + [ref / REF_QTY]
         rate, t = sorted(raw_rates)[len(raw_rates) // 2], now()  # median of the last 3: one outlier moves nothing
         hist.append((rate, raw_rates))
@@ -485,23 +514,32 @@ def _cmd_run(a):
             continue
         impact = 1 - (out / qty) / (ref / REF_QTY)
         say(f"[{reason}] quote {qty:,} coins -> {out:.6f} BNB (impact {impact:.2%})")
-        if impact > Decimal(str(a.max_impact)):
+        why = (f"impact {impact:.0%} is above --max-impact {cap:.0%}" if impact > cap else
+               f"{out / qty:.10f} BNB per coin is below --floor {fl:.0%} of the session's first rate {rate0:.10f}"
+               if out / qty < rate0 * fl else None)
+        if why:
             if qty > a.min_chunk:
                 chunk = max(a.min_chunk, qty // 2)
-                say(f"impact above {a.max_impact:.0%}: chunk -> {chunk:,}")
+                say(f"{why}: chunk -> {chunk:,}")
                 continue
-            if a.mode == "now":  # "now" means now: waiting here only sells later into a falling price
-                say(f"impact {impact:.0%} is above --max-impact {a.max_impact:.0%} even at the minimum chunk "
-                    f"({qty:,} coins): stopping; raise --max-impact, or sell later with --mode trail")
+            if a.mode == "now":  # "now" means now: waiting minutes here only sells later into a falling price
+                if now_tries < 2:  # one odd quote pair must not end the sale: quote again shortly
+                    now_tries += 1
+                    say(f"{why} at the smallest chunk ({qty:,} coins); quoting again in 10 s ({now_tries}/2)")
+                    pause(10)
+                    continue
+                say(f"{why} at the smallest chunk ({qty:,} coins): stopping"
+                    + (f" {NOTHING_SOLD} in this session" if swaps == 0 and sold_req == 0 else "")
+                    + "; raise --max-impact or lower --floor, or sell later with --mode trail")
                 break
             waits += 1
             if waits > a.max_waits:
-                say("impact stays too high: stopping")
+                say("the price stays outside --max-impact: stopping")
                 break
-            say(f"impact too high even at the minimum chunk; waiting {a.gap * 2}s")
+            say(f"{why} at the smallest chunk; waiting {a.gap * 2}s")
             pause(a.gap * 2)
             continue
-        waits = 0
+        waits, now_tries = 0, 0
         if a.dry_run:
             virtual[0] -= qty * 10 ** DECIMALS
             sold_req += qty * 10 ** DECIMALS
@@ -588,7 +626,8 @@ def _cmd_run(a):
         say(e)
         raise SystemExit(f"the end balance is unreadable ({e}): check the balance and {a.journal} before selling more")
     if not done:  # STOP, a signal, or an error stopped the sale part way: some coins may be sold already
-        raise SystemExit(f"stopped before the sale was done (see the line above); some coins may be sold already: "
+        tail = ("this session placed no order" if swaps == 0 and sold_req == 0 else "some coins may be sold already")
+        raise SystemExit(f"stopped before the sale was done (see the line above); {tail}: "
                          f"check the balance and {a.journal} before selling more")
 
 
@@ -623,6 +662,8 @@ def main():
         s.add_argument("--min-chunk", type=int, default=20_000)
         s.add_argument("--max-impact", type=float, default=0.5,
                        help="halve a chunk whose quote is this far below the 1,000-coin reference rate (0.5 = 50%%)")
+        s.add_argument("--floor", type=float, default=0.5,
+                       help="never sell a chunk below this fraction of the session's first rate (0 = no floor)")
         s.add_argument("--slippage", type=float, default=3.0, help="slippage cap in percent, at most 5")
         s.add_argument("--gap", type=float, default=60.0, help="minimum seconds between two sales")
         s.add_argument("--mode", choices=("trail", "now"), default="trail")
@@ -647,7 +688,7 @@ def main():
         a.journal = os.path.join(HERE, "sell-dry.jsonl" if getattr(a, "dry_run", False) else "sell.jsonl")
     if (not 0 < a.fraction <= 1 or a.min_chunk < 1 or a.chunk < a.min_chunk or not 0 < a.slippage <= 5
             or not 0 < a.pullback < 0.5 or not 0 <= a.warmup < a.deadline or a.dust < 1 or a.gap < 0
-            or not 0 < a.max_impact < 1 or a.max_waits < 0 or a.max_swaps < 1 or a.poll < 5
+            or not 0 < a.max_impact < 1 or not 0 <= a.floor < 1 or a.max_waits < 0 or a.max_swaps < 1 or a.poll < 5
             or (a.keep_coins is not None and a.keep_coins < 0)):
         raise SystemExit("bad arguments")
     if a.assume_balance and not a.dry_run:

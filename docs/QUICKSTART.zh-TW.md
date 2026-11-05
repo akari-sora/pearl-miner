@@ -101,7 +101,7 @@ Proofs  9,600 usable (10,000 in submit/proofs.json, 400 already sent according t
 Gas     budget 0.045 BNB of fees in total for submit/journal.jsonl (every run that used it, not per day);
         earlier runs used 0.000600, so up to 0.044400 BNB for this run.
         Keep reserve 0.005 BNB: the run stops before the wallet's BNB would fall below it.
-Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 50% price impact is halved; if even the smallest chunk is over, it stops without selling.
+Sell    now: right after the run ends, in chunks of up to 100k coins; a chunk over 50% price impact, or below half the first price, is halved; if even the smallest chunk is, it stops and sells nothing more.
         Sells at most 80% of what THIS run's proofs can have earned (proofs mined x the reward read before the start, which only falls);
         coins you held before stay, apart from at most 80% of the gap between that bound and what the proofs really earned.
         Only after a normal end (cap full, budget spent, proofs used up, deadline): never after STOP, Ctrl-C,

@@ -344,8 +344,9 @@ def sell_text(a):
     pct = f"{a.sell_fraction:.0%}"
     if a.sell == "off":
         return ["off: nothing is sold; every coin stays in the wallet."]
-    how = ("now: right after the run ends, in chunks of up to 100k coins; a chunk over 50% price impact is halved; "
-           "if even the smallest chunk is over, it stops without selling." if a.sell == "now" else
+    how = ("now: right after the run ends, in chunks of up to 100k coins; a chunk over 50% price impact, or below "
+           "half the first price, is halved; if even the smallest chunk is, it stops and sells nothing more."
+           if a.sell == "now" else
            "trail: after the run, watch the price for up to 120 minutes and sell on a 7% pullback from its high or "
            "when sales fall behind schedule.")
     return [how, f"Sells at most {pct} of what THIS run's proofs can have earned (proofs mined x the reward read "

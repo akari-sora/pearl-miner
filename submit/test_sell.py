@@ -240,6 +240,12 @@ def run(name, env, argv, run_alive=False, stop_file=False, no_pid=False, tmp=Non
 
 real_sleep = time.sleep
 
+
+def journal_events(tmp):
+    with open(os.path.join(tmp, "sell.jsonl"), encoding="utf-8") as f:
+        return [json.loads(x) for x in f if x.strip()]
+
+
 # 1. normal: 300k coins, sell 80% = 240k in 100k chunks
 e = Env(300_000)
 run("normal 300k", e, ["run"])
@@ -256,10 +262,16 @@ expect("thin pool: chunks shrank below 100k", max(e.swaps) < 100_000)
 
 # 3. pool too thin even at the minimum chunk: no swap at all; --mode trail keeps waiting and re-quoting
 e = Env(300_000, pool=Pool(L=int(7.06e17 / 200)))
-t0 = CLOCK.now()
-run("too thin", e, ["run", "--max-impact", "0.02"])
+tmpd = tempfile.mkdtemp(prefix="sell-thin-")
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    run("too thin", e, ["run", "--max-impact", "0.02"], tmp=tmpd)
+print(buf.getvalue(), end="")
 expect("too thin: nothing sold", e.swaps == [] and e.bal == 300_000 * 10 ** 8)
-expect("too thin, trail: it waited (2 x --gap per try) before giving up", CLOCK.now() - t0 >= 6 * 120)
+expect("too thin, trail: it waited 2 x --gap --max-waits (6) times at the smallest chunk, then stopped not done",
+       buf.getvalue().count("at the smallest chunk; waiting 120.0s") == 6
+       and "the price stays outside --max-impact: stopping" in buf.getvalue()
+       and journal_events(tmpd)[-1].get("done") is False)
 
 # 4. two failed orders in a row: stop
 e = Env(300_000, fail_orders=2)
@@ -621,11 +633,6 @@ ps._submit.find_baw = lambda: "baw"
 expect("baw not found: refuses before anything else, nothing sold", err and "baw not found" in err and e.swaps == [])
 
 # ---- review round: --max-sell-coins, exact --keep-coins, signals, baw in its own group
-def journal_events(tmp):
-    with open(os.path.join(tmp, "sell.jsonl"), encoding="utf-8") as f:
-        return [json.loads(x) for x in f if x.strip()]
-
-
 # 59. --max-sell-coins caps the session's sales below the fraction
 e = Env(300_000)
 run("max sell 50k", e, ["run", "--mode", "now", "--max-sell-coins", "50000"])
@@ -770,9 +777,75 @@ evs = journal_events(tmpd)
 expect("v0.1.4: now + cap too low at the minimum chunk: stops at once, nothing sold, non-zero, says why",
        err is not None and "stopped before the sale was done" in err and e.swaps == [] and e.bal == 30_000 * 10 ** 8
        and CLOCK.now() - t0 < 120 and evs and evs[-1].get("ev") == "end" and evs[-1].get("done") is False)
-expect("v0.1.4: the stop line names the minimum chunk, --max-impact and --mode trail",
-       "even at the minimum chunk (20,000 coins): stopping; raise --max-impact, or sell later with --mode trail"
-       in buf.getvalue())
+expect("v0.1.4: it quotes again twice 10 s apart, then its stop line names the smallest chunk, says nothing was sold "
+       "(the marker pearl.py reads), --max-impact and --mode trail",
+       buf.getvalue().count("quoting again in 10 s") == 2
+       and "at the smallest chunk (20,000 coins): stopping before any sale in this session; raise --max-impact or "
+           "lower --floor, or sell later with --mode trail" in buf.getvalue())
+expect("v0.1.4: the last line says this session placed no order", err is not None and "this session placed no order" in err)
+
+# 69. many chunks cannot walk the price down without limit: no chunk sells below half the session's first rate
+#     (300,000 coins on the day-2 pool: v0.1.3 sold nothing; without the floor all 240k would go at ~12% of it)
+tmpd = tempfile.mkdtemp(prefix="sell-floor-")
+e = Env(300_000, pool=Pool(**DAY2))
+err = run("day-2 pool, 300k, defaults", e, ["run", "--mode", "now"], tmp=tmpd)
+evs = journal_events(tmpd)
+r0 = [Decimal(r["rate0"]) for r in evs if r.get("ev") == "rate0"]
+fills = [(r["qty"], Decimal(r["bnb"])) for r in evs if r.get("ev") == "filled"]
+expect("v0.1.4: --floor 0.5 (default): some chunks sell, every one at >= 50% of the first rate, then it stops (not done)",
+       len(r0) == 1 and fills and all(b / q >= r0[0] / 2 for q, b in fills) and 0 < sum(e.swaps) < 240_000
+       and err is not None and "stopped before the sale was done" in err and evs[-1].get("done") is False)
+
+# 70. a restart keeps the session's first rate (the floor does not move down with the price)
+e.bal_hist.clear()
+os.remove(os.path.join(tmpd, "STOP")) if os.path.exists(os.path.join(tmpd, "STOP")) else None
+sold_before = sum(e.swaps)
+err = run("day-2 pool, restart", e, ["run", "--mode", "now"], tmp=tmpd)
+evs = journal_events(tmpd)
+r0b = [Decimal(r["rate0"]) for r in evs if r.get("ev") == "rate0"]
+fills = [(r["qty"], Decimal(r["bnb"])) for r in evs if r.get("ev") == "filled"]
+expect("v0.1.4: restart: same first rate (one rate0 record), every fill still >= 50% of it, nothing more sold "
+       "below it", r0b == r0 and any(r.get("ev") == "restart" for r in evs)
+       and all(b / q >= r0[0] / 2 for q, b in fills) and sum(e.swaps) == sold_before)
+
+# 71. --floor 0 turns the floor off (the per-chunk cap still holds); --floor 1 is refused
+e = Env(300_000, pool=Pool(**DAY2))
+err = run("day-2 pool, 300k, --floor 0", e, ["run", "--mode", "now", "--floor", "0"])
+expect("v0.1.4: --floor 0: sells the whole 80%, every chunk within the 50% per-chunk cap",
+       err is None and sum(e.swaps) == 240_000 and all(i <= 0.5 for i in e.impacts))
+e = Env(300_000)
+err = run("--floor 1 refused", e, ["run", "--floor", "1"])
+expect("v0.1.4: --floor 1 refused", err == "bad arguments" and e.swaps == [])
+
+# 72. after a --mode now stop that sent no order, a later --mode trail starts afresh: its own 20-min warmup and
+#     first rate, not the stopped session's (else the warmup is skipped and it sells on the first tick)
+tmpd = tempfile.mkdtemp(prefix="sell-now-trail-")
+e = Env(30_000, pool=Pool(**DAY2))
+run("now stops, no order", e, ["run", "--mode", "now", "--max-impact", "0.02"], tmp=tmpd)
+CLOCK.sleep(90 * 60)  # 90 minutes later
+e.pool.t0 = CLOCK.now()
+n_before = len(journal_events(tmpd))
+err = run("trail afterwards", e, ["run", "--mode", "trail"], tmp=tmpd)
+later = journal_events(tmpd)[n_before:]
+ticks = [r for r in later if r.get("ev") == "tick"]
+expect("v0.1.4: now (no order) -> trail later: a restart record, a fresh first rate, the warmup starts at 0 "
+       "(no sale on the first tick)", later and later[0].get("ev") == "restart"
+       and sum(r.get("ev") == "rate0" for r in later) == 1 and ticks and ticks[0].get("el", 99) < 1
+       and ticks[0].get("reason") is None)
+expect("v0.1.4: ... and it then sells the 80% on its schedule", err is None and e.bal == 6_000 * 10 ** 8)
+
+# 73. plan quotes with the --slippage it is given (it used the old 1.5 constant)
+seen_slip = []
+e = Env(300_000)
+orig = e.baw
+def baw_seen(args, timeout=60):
+    if args[:2] == ["market-order", "quote"]:
+        seen_slip.append(args[args.index("--slippage") + 1])
+    return orig(args, timeout)
+e.baw = baw_seen
+run("plan default slippage", e, ["plan"])
+run("plan --slippage 2", e, ["plan", "--slippage", "2"])
+expect("v0.1.4: plan quotes at the default 3.0, and at --slippage 2 when given", seen_slip == ["3.0", "2.0"])
 
 # 66. the seller's signal handlers are put back when it returns (an in-process caller keeps its Ctrl-C)
 expect("D4: SIGINT handler restored after run", signal.getsignal(signal.SIGINT) is INITIAL_SIGINT)
