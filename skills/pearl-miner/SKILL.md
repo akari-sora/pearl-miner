@@ -13,7 +13,7 @@ what was mined.
 This file works on its own: everything needed to start is below. After cloning, the repository's `AGENTS.md` and
 `docs/QUICKSTART.md` have the details. The safety rules here always apply.
 
-PINNED: tag=v0.1.3 commit=42060a894c0a5257c58b383a5b62fcdbbbe696c0
+PINNED: tag=v0.1.4 commit=8e80348ee583b85d162b76832e3d3de330c55fa1
 
 ## Prerequisites
 
