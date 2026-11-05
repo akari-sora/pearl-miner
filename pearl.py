@@ -586,8 +586,9 @@ def cmd_auto(a):
                     full = next((x for x in reversed(slines) if x.strip() and not SOLD_RE.search(x)
                                  and SELLER_TRAILER not in x), "no output").strip()
                     last = full[:200]
-                    if NOTHING_SOLD in full or any(NO_ORDER in x for x in slines):  # whole lines: a long path can
-                        # push the marker past 200 chars; NO_ORDER covers a STOP, a signal or bad quotes before any order
+                    if NOTHING_SOLD in full or any(SELLER_TRAILER in x and NO_ORDER in x for x in slines):
+                        # whole lines: a long path can push the marker past 200 chars; the trailer's NO_ORDER covers
+                        # a STOP, a signal or bad quotes before any order
                         sold_line = "skipped: the seller stopped before any sale"
                         code, reason = EXIT_SALE, (f"the seller stopped before any sale (exit {src}): {last}. Nothing "
                                                    f"was sold. To sell later: "
